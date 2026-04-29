@@ -281,7 +281,7 @@ static char scancode_to_ascii(uint8_t sc) {
     switch (sc) {
         case 0x0E: return '\b';       /* backspace */
         case 0x1C: return '\n';       /* enter */
-        case 0x39: return ' ';
+        case 0x39: return ' ';        /* space */
         case 0x01: return 0;          /* ESC – ignored */
         case 0x02: return '1';
         case 0x03: return '2';
@@ -334,7 +334,6 @@ static char scancode_to_ascii(uint8_t sc) {
         case 0x36: return 0;          /* right shift – ignore */
         case 0x37: return '*';        /* keypad * */
         case 0x38: return 0;          /* alt – ignore */
-        case 0x39: return ' ';
         default: return 0;
     }
 }
@@ -606,7 +605,7 @@ void kernel_main(uint32_t magic, uint32_t addr) {
     /* Check for framebuffer info (bit 11) */
     if ((flags & (1 << 11)) && *(mbi+22) != 0) {
         /* mbi->framebuffer_addr is at offset 88 (22*4) */
-        fb = (uint8_t *)(uint64_t)*(mbi+22);
+        fb = (uint8_t *)(uint32_t)*(mbi+22);
         fb_pitch = *(mbi+24);       /* mbi->framebuffer_pitch */
         fb_width = *(mbi+25);       /* mbi->framebuffer_width */
         fb_height = *(mbi+26);      /* mbi->framebuffer_height */
