@@ -1,0 +1,38 @@
+name: Build OS ISO
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Dependencies
+        run: sudo apt update && sudo apt install -y nasm xorriso grub-pc-bin gcc-multilib
+      
+      - name: Compile Bootloader
+        run: nasm -f elf32 boot.s -o boot.o
+      
+      - name: Compile Kernel
+        run: gcc -m32 -ffreestanding -nostdlib -Wall -O0 -c kernel.c -o kernel.o
+      
+      - name: Link Kernel
+        run: ld -m elf_i386 -T linker.ld -o kernel.bin boot.o kernel.o
+      
+      - name: Create ISO Structure
+        run: |
+          mkdir -p iso/boot/grub
+          cp kernel.bin iso/boot/
+          cp grub.cfg iso/boot/grub/
+      
+      - name: Build ISO
+        run: grub-mkrescue -o os.iso iso
+      
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: OS-Bootable-ISO
+          path: os.iso
