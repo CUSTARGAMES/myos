@@ -1,50 +1,35 @@
-/* boot.s – Multiboot header, set up stack, call kernel_main */
-.set MB_MAGIC,    0x1BADB002
-.set MB_FLAGS,    (1<<0) | (1<<1) | (1<<2)   /* align, meminfo, vbe */
-.set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
+section .multiboot
+align 4
+dd 0x1BADB002
+dd (1 << 0) | (1 << 1) | (1 << 2)
+dd -(0x1BADB002 + ((1 << 0) | (1 << 1) | (1 << 2)))
+dd 0
+dd 0
+dd 0
+dd 0
+dd 0
+dd 1
+dd 640
+dd 480
+dd 8
 
-.section .multiboot
-.align 4
-.long MB_MAGIC
-.long MB_FLAGS
-.long MB_CHECKSUM
-/* header_addr, load_addr, load_end_addr, bss_end_addr, entry_addr */
-.long 0
-.long 0
-.long 0
-.long 0
-.long 0
-/* video request: 640x480, 8 bits */
-.long 1       /* mode_type = graphics */
-.long 640
-.long 480
-.long 8
-
-.section .text
-.globl _start
-.type _start, @function
+section .text
+global _start
 _start:
-    /* Set up stack */
-    movl $stack_top, %esp
-
-    /* Reset EFLAGS */
-    pushl $0
+    mov esp, stack_top
+    push 0
     popf
-
-    /* Save Multiboot info (GRUB passes magic in EAX, info struct in EBX) */
-    pushl %ebx
-    pushl %eax
-
+    push ebx
+    push eax
+    extern kernel_main
     call kernel_main
-
-    /* If kernel_main returns, halt */
     cli
+halt:
     hlt
-.Lhang:
-    jmp .Lhang
+    jmp halt
 
-.section .bss
-.align 16
+section .bss
+align 16
 stack_bottom:
-    .skip 16384   /* 16 KB stack */
+    resb 16384
 stack_top:
