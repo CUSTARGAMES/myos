@@ -1,360 +1,150 @@
-/* gui.c - Window Manager & GUI */
 #include <stdint.h>
+extern uint8_t *fb; extern int fp,fw,fh,mx,my,mb,mc; extern uint8_t md[3];
+extern void outb(uint16_t,uint8_t); extern uint8_t inb(uint16_t);
+#define pp(x,y,c) if((x)>=0&&(x)<fw&&(y)>=0&&(y)<fh)fb[(y)*fp+(x)]=c
+#define BLACK 0
+#define WHITE 15
+#define LGRAY 7
+#define DGRAY 8
+#define LBLUE 9
+#define CYAN 3
+#define RED 4
 
-/* External globals */
-extern uint8_t *fb;
-extern int fb_pitch, fb_width, fb_height;
-extern int mouse_x, mouse_y, mouse_buttons;
+static const uint8_t font[95][8]={
+{0,0,0,0,0,0,0,0},{24,60,60,24,24,0,24,0},{102,102,36,0,0,0,0,0},{108,108,254,108,254,108,108,0},{24,62,96,60,6,124,24,0},{0,102,172,216,54,106,214,0},{56,108,56,118,220,204,118,0},{24,24,48,0,0,0,0,0},{12,24,48,48,48,24,12,0},{48,24,12,12,12,24,48,0},{0,102,60,255,60,102,0,0},{0,24,24,126,24,24,0,0},{0,0,0,0,0,24,24,48},{0,0,0,126,0,0,0,0},{0,0,0,0,0,24,24,0},{6,12,24,48,96,192,128,0},{124,198,206,222,246,230,124,0},{24,56,120,24,24,24,126,0},{124,198,6,28,48,102,254,0},{124,198,6,60,6,198,124,0},{28,60,108,204,254,12,12,0},{254,192,252,6,6,198,124,0},{56,96,192,252,198,198,124,0},{254,198,12,24,48,48,48,0},{124,198,198,124,198,198,124,0},{124,198,198,126,6,12,120,0},{0,24,24,0,0,24,24,0},{0,24,24,0,0,24,24,48},{0,0,0,126,0,0,126,0,0},{0,0,0,0,0,0,0,0},
+{124,198,222,222,222,192,120,0},{56,108,198,254,198,198,198,0},{252,102,102,124,102,102,252,0},{60,102,192,192,192,102,60,0},{248,108,102,102,102,108,248,0},{254,98,104,120,104,98,254,0},{254,98,104,120,104,96,240,0},{60,102,192,222,198,102,58,0},{198,198,198,254,198,198,198,0},{60,24,24,24,24,24,60,0},{30,12,12,12,204,204,120,0},{230,102,108,120,108,102,230,0},{240,96,96,96,98,102,254,0},{198,238,254,214,198,198,198,0},{198,230,246,222,206,198,198,0},{124,198,198,198,198,198,124,0},{252,102,102,124,96,96,240,0},{124,198,198,198,198,214,124,6},{252,102,102,124,108,102,230,0},{124,198,96,56,12,198,124,0},{126,90,24,24,24,24,60,0},{198,198,198,198,198,198,124,0},{198,198,198,198,108,56,16,0},{198,198,198,214,254,238,198,0},{198,198,108,56,56,108,198,0},{102,102,102,60,24,24,60,0},{254,198,140,24,50,102,254,0},{60,48,48,48,48,48,60,0},{192,96,48,24,12,6,2,0},{60,12,12,12,12,12,60,0},{16,56,108,198,0,0,0,0},{0,0,0,0,0,0,0,255}};
 
-/* GFX functions */
-extern void fill_rect(int x, int y, int w, int h, uint8_t c);
-extern void hline(int x, int y, int w, uint8_t c);
-extern void vline(int x, int y, int h, uint8_t c);
-extern void putpixel(int x, int y, uint8_t c);
-extern void draw_raised_box(int x, int y, int w, int h);
-extern void draw_sunken_box(int x, int y, int w, int h);
-extern void draw_char(int x, int y, char c, uint8_t fg, uint8_t bg);
-extern void draw_string(int x, int y, const char *s, uint8_t fg, uint8_t bg);
-extern int str_len(const char *s);
-extern int str_cmp(const char *a, const char *b);
-
-/* Mouse functions */
-extern void mouse_handle_data(uint8_t d);
-
-/* Keyboard functions */
-extern char scancode_to_ascii(uint8_t sc);
-
-/* I/O */
-extern void outb(uint16_t port, uint8_t val);
-extern uint8_t inb(uint16_t port);
-extern void io_wait(void);
-
-/* Colors */
-#define C_BLACK   0
-#define C_BLUE    1
-#define C_CYAN    3
-#define C_RED     4
-#define C_LGRAY   7
-#define C_DGRAY   8
-#define C_LBLUE   9
-#define C_WHITE   15
-#define DESKTOP    C_CYAN
-#define TASKBAR    C_LGRAY
-#define TITLE_ACT  C_LBLUE
-#define TITLE_INACT C_DGRAY
-#define BTN_FACE   C_LGRAY
-#define WIN_BG     C_WHITE
-
-/* Window system */
-#define MAX_WIN 5
-static int win_x[MAX_WIN], win_y[MAX_WIN], win_w[MAX_WIN], win_h[MAX_WIN];
-static int win_vis[MAX_WIN];
-static char win_title[MAX_WIN][30];
-static int win_count = 0;
-static int active_win = -1;
-static int dragging = -1;
-static int drag_ox, drag_oy;
-
-/* Notepad */
-static char notepad_buf[2000];
-static int notepad_len = 0;
-
-/* Start menu */
-static int start_open = 0;
-static const char *start_items[] = {"Notepad", "My PC", "Calculator", "Shut Down"};
-static int start_count = 4;
-static int start_y;
-
-/* Desktop icons */
-static const char *icons[] = {"Notepad", "My PC", "Calc"};
-static int icon_x[] = {20, 20, 20};
-static int icon_y_pos[] = {20, 100, 180};
-static int icon_n = 3;
-
-/* Error popup */
-static int err_active = 0, err_timer = 0;
-static int err_x, err_y;
-
-/* Cursor */
-static uint8_t cursor_bg[22*22];
-
-/* Taskbar height */
-static int tbh;
-
-/* Random */
-static uint32_t rseed = 0xDEAD;
-static uint32_t rand_val(void) {
-    rseed = (1103515245 * rseed + 12345) & 0x7FFFFFFF;
-    return rseed;
+static void dc(int x,int y,char c,uint8_t fg,uint8_t bg){
+    if(c<32||c>126)return;
+    const uint8_t *g=font[c-32];
+    for(int r=0;r<8;r++){uint8_t b=g[r];for(int cc=0;cc<8;cc++)pp(x+cc,y+r,(b&(0x80>>cc))?fg:bg);}
 }
+static void ds(int x,int y,const char*s,uint8_t fg,uint8_t bg){while(*s){dc(x,y,*s++,fg,bg);x+=8;}}
+static void fr(int x,int y,int w,int h,uint8_t c){for(int dy=0;dy<h;dy++)for(int dx=0;dx<w;dx++)pp(x+dx,y+dy,c);}
+static void hl(int x,int y,int w,uint8_t c){for(int i=0;i<w;i++)pp(x+i,y,c);}
+static void vl(int x,int y,int h,uint8_t c){for(int i=0;i<h;i++)pp(x,y+i,c);}
+static void rbox(int x,int y,int w,int h){hl(x,y,w,WHITE);vl(x,y,h,WHITE);hl(x,y+h-1,w,DGRAY);vl(x+w-1,y,h,DGRAY);}
+static int sl(const char*s){int n=0;while(s[n])n++;return n;}
+static int sc(const char*a,const char*b){while(*a&&*b&&*a==*b){a++;b++;}return*a-*b;}
 
-static void cursor_save(void) {
-    int idx = 0;
-    for (int dy = 0; dy < 22; dy++)
-        for (int dx = 0; dx < 22; dx++) {
-            int px = mouse_x + dx, py = mouse_y + dy;
-            cursor_bg[idx++] = (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
-                               ? fb[py * fb_pitch + px] : 0;
-        }
-}
-static void cursor_restore(void) {
-    int idx = 0;
-    for (int dy = 0; dy < 22; dy++)
-        for (int dx = 0; dx < 22; dx++) {
-            int px = mouse_x + dx, py = mouse_y + dy;
-            if (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
-                fb[py * fb_pitch + px] = cursor_bg[idx];
-            idx++;
-        }
-}
-static void cursor_draw(void) {
-    /* Triangle arrow */
-    static const int arrow[22][22] = {
-        {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0},
-        {1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,1,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
-    };
-    for (int dy = 0; dy < 22; dy++)
-        for (int dx = 0; dx < 22; dx++)
-            if (arrow[dy][dx]) putpixel(mouse_x + dx, mouse_y + dy, C_WHITE);
-}
+static int nbl=0,nbpos=0;
+static char nbuf[2000];
+static int winx=70,winy=40,winw=320,winh=200;
+static int wvis=0;
+static int err=0,ert=0,erx,ery;
+static int curbg[484];
+static int so=0;
 
-static void draw_titlebar(int x, int y, int w, const char *t, uint8_t c) {
-    fill_rect(x, y, w, 18, c);
-    draw_string(x + 4, y + 2, t, C_WHITE, c);
-    int bx = x + w - 18;
-    fill_rect(bx, y, 16, 16, BTN_FACE);
-    draw_raised_box(bx, y, 16, 16);
-    draw_char(bx + 4, y + 2, 'X', C_BLACK, BTN_FACE);
+static void draw_cur(void){
+    for(int dy=0;dy<22;dy++)for(int dx=0;dx<22;dx++)if((dy+dx)<22&&dy>=dx){pp(mx+dx,my+dy,WHITE);pp(mx+dx+1,my+dy,WHITE);}
 }
+static void save_cur(void){int idx=0;for(int dy=0;dy<22;dy++)for(int dx=0;dx<22;dx++){int px=mx+dx,py=my+dy;curbg[idx++]=(px>=0&&px<fw&&py>=0&&py<fh)?fb[py*fp+px]:0;}}
+static void rest_cur(void){int idx=0;for(int dy=0;dy<22;dy++)for(int dx=0;dx<22;dx++){int px=mx+dx,py=my+dy;if(px>=0&&px<fw&&py>=0&&py<fh)fb[py*fp+px]=curbg[idx];idx++;}}
 
-static void draw_window_frame(int i) {
-    if (!win_vis[i]) return;
-    int x = win_x[i], y = win_y[i], w = win_w[i], h = win_h[i];
-    uint8_t tc = (i == active_win) ? TITLE_ACT : TITLE_INACT;
-    fill_rect(x, y, w, h, WIN_BG);
-    draw_titlebar(x, y, w, win_title[i], tc);
-    draw_raised_box(x, y + 18, w, h - 18);
-}
-
-static void draw_notepad(int i) {
-    int cx = win_x[i] + 4, cy = win_y[i] + 22;
-    int mc = (win_w[i] - 8) / 8, mr = (win_h[i] - 40) / 8;
-    fill_rect(cx, cy, mc * 8, mr * 8, C_WHITE);
-    draw_sunken_box(cx - 1, cy - 1, mc * 8 + 2, mr * 8 + 2);
-    int pos = 0, row = 0;
-    while (row < mr && pos < notepad_len) {
-        int col = 0;
-        while (col < mc && pos < notepad_len && notepad_buf[pos] != '\n') {
-            draw_char(cx + col * 8, cy + row * 8, notepad_buf[pos], C_BLACK, C_WHITE);
-            col++; pos++;
-        }
-        if (pos < notepad_len && notepad_buf[pos] == '\n') pos++;
+static void draw_win(void){
+    if(!wvis)return;
+    fr(winx,winy,winw,winh,WHITE);
+    fr(winx,winy,winw,18,LBLUE);
+    ds(winx+4,winy+2,"Notepad - Untitled",WHITE,LBLUE);
+    int bx=winx+winw-18;
+    fr(bx,winy,16,16,LGRAY);rbox(bx,winy,16,16);dc(bx+4,winy+2,'X',BLACK,LGRAY);
+    rbox(winx,winy+18,winw,winh-18);
+    int cx=winx+4,cy=winy+22,mc=(winw-8)/8,mr=(winh-40)/8;
+    fr(cx,cy,mc*8,mr*8,WHITE);
+    hl(cx,cy,mc*8,DGRAY);vl(cx,cy,mr*8,DGRAY);hl(cx,cy+mr*8-1,mc*8,WHITE);vl(cx+mc*8-1,cy,mr*8,WHITE);
+    int pos=0,row=0;
+    while(row<mr&&pos<nbl){
+        int col=0;
+        while(col<mc&&pos<nbl&&nbuf[pos]!='\n'){dc(cx+col*8,cy+row*8,nbuf[pos],BLACK,WHITE);col++;pos++;}
+        if(pos<nbl&&nbuf[pos]=='\n')pos++;
         row++;
     }
 }
 
-static void draw_icon(int x, int y, const char *label) {
-    fill_rect(x, y, 32, 40, DESKTOP);
-    fill_rect(x + 2, y + 2, 28, 28, C_WHITE);
-    draw_raised_box(x + 2, y + 2, 28, 28);
-    fill_rect(x + 4, y + 4, 24, 8, C_BLUE);
-    hline(x + 6, y + 16, 20, C_DGRAY);
-    hline(x + 6, y + 19, 14, C_DGRAY);
-    hline(x + 6, y + 22, 16, C_DGRAY);
-    int len = str_len(label);
-    int tx = x + (32 - len * 8) / 2;
-    for (int i = 0; i < len; i++)
-        draw_char(tx + i * 8, y + 34, label[i], C_WHITE, DESKTOP);
+static void show_err(void){
+    erx=(fw-200)/2;ery=(fh-70)/2;
+    fr(erx,ery,200,70,LGRAY);rbox(erx,ery,200,70);
+    fr(erx,ery,200,18,RED);ds(erx+4,ery+2,"Error",WHITE,RED);
+    ds(erx+20,ery+30,"No filesystem found!",BLACK,LGRAY);
+    int bx=erx+80;fr(bx,ery+48,40,16,LGRAY);rbox(bx,ery+48,40,16);ds(bx+10,ery+50,"OK",BLACK,LGRAY);
+    err=1;ert=300000;
 }
 
-static void draw_taskbar(void) {
-    fill_rect(0, fb_height - tbh, fb_width, tbh, TASKBAR);
-    hline(0, fb_height - tbh, fb_width, C_WHITE);
-    /* Start button */
-    int sx = 2, sy = fb_height - tbh + 2;
-    fill_rect(sx, sy, 56, tbh - 4, BTN_FACE);
-    draw_raised_box(sx, sy, 56, tbh - 4);
-    draw_string(sx + 8, sy + 3, "Start", C_BLACK, BTN_FACE);
-    /* Clock */
-    int cx = fb_width - 56;
-    draw_sunken_box(cx, fb_height - tbh + 2, 52, tbh - 4);
-    draw_string(cx + 10, fb_height - tbh + 4, "12:00", C_BLACK, BTN_FACE);
+static void draw_taskbar(void){
+    int tbh=24;
+    fr(0,fh-tbh,fw,tbh,LGRAY);hl(0,fh-tbh,fw,WHITE);
+    fr(2,fh-tbh+2,56,tbh-4,LGRAY);rbox(2,fh-tbh+2,56,tbh-4);ds(10,fh-tbh+4,"Start",BLACK,LGRAY);
+    int cx=fw-56;fr(cx,fh-tbh+2,52,tbh-4,LGRAY);hl(cx,fh-tbh+2,52,DGRAY);vl(cx,fh-tbh+2,tbh-4,DGRAY);hl(cx,fh-tbh+tbh-3,52,WHITE);vl(cx+51,fh-tbh+2,tbh-4,WHITE);
+    ds(cx+12,fh-tbh+4,"12:00",BLACK,LGRAY);
 }
 
-static void draw_start_menu(void) {
-    int sx = 2, sy = fb_height - tbh - start_count * 24 - 4;
-    start_y = sy;
-    fill_rect(sx, sy, 160, start_count * 24 + 4, BTN_FACE);
-    draw_raised_box(sx, sy, 160, start_count * 24 + 4);
-    for (int i = 0; i < start_count; i++) {
-        int iy = sy + 2 + i * 24;
-        draw_string(sx + 8, iy + 4, start_items[i], C_BLACK, BTN_FACE);
-    }
+static void draw_icon(int x,int y,const char*label){
+    fr(x+2,y+2,28,28,WHITE);rbox(x+2,y+2,28,28);
+    fr(x+4,y+4,24,8,LBLUE);hl(x+6,y+16,20,DGRAY);hl(x+6,y+19,14,DGRAY);hl(x+6,y+22,16,DGRAY);
+    int len=sl(label);int tx=x+(32-len*8)/2;
+    for(int i=0;i<len;i++)dc(tx+i*8,y+34,label[i],WHITE,CYAN);
 }
 
-static void show_error_popup(void) {
-    err_x = (fb_width - 200) / 2;
-    err_y = (fb_height - 70) / 2;
-    fill_rect(err_x, err_y, 200, 70, BTN_FACE);
-    draw_raised_box(err_x, err_y, 200, 70);
-    draw_titlebar(err_x, err_y, 200, "Error", C_RED);
-    draw_string(err_x + 20, err_y + 30, "No filesystem found!", C_BLACK, BTN_FACE);
-    /* OK button */
-    int bx = err_x + 80;
-    fill_rect(bx, err_y + 48, 40, 16, BTN_FACE);
-    draw_raised_box(bx, err_y + 48, 40, 16);
-    draw_string(bx + 10, err_y + 50, "OK", C_BLACK, BTN_FACE);
-    err_active = 1; err_timer = 400000;
-}
-
-static int in_rect(int mx, int my, int x, int y, int w, int h) {
-    return (mx >= x && mx < x + w && my >= y && my < y + h);
-}
-
-static void add_window(int x, int y, int w, int h, const char *t) {
-    if (win_count >= MAX_WIN) return;
-    int i = win_count++;
-    win_x[i] = x; win_y[i] = y; win_w[i] = w; win_h[i] = h;
-    for (int j = 0; j < 30 && t[j]; j++) win_title[i][j] = t[j];
-    win_vis[i] = 1;
-    active_win = i;
-}
-
-void gui_init(void) {
-    tbh = (fb_height > 200) ? 28 : 20;
-    cursor_save();
-}
-
-void gui_main_loop(void) {
-    int tick = 0, prev_btn = 0;
-    while (1) {
-        /* ==== POLL INPUT ==== */
-        while (inb(0x64) & 1) {
-            uint8_t st = inb(0x64), d = inb(0x60);
-            if (st & 0x20) {
-                mouse_handle_data(d);
-                int click = (prev_btn == 0 && mouse_buttons == 1);
-                prev_btn = mouse_buttons;
-                
-                if (click) {
-                    /* Start button */
-                    if (in_rect(mouse_x, mouse_y, 2, fb_height - tbh + 2, 56, tbh - 4))
-                        start_open = !start_open;
-                    /* Desktop icons */
-                    for (int i = 0; i < icon_n; i++) {
-                        if (in_rect(mouse_x, mouse_y, icon_x[i], icon_y_pos[i], 32, 40)) {
-                            start_open = 0;
-                            if (i == 0) add_window(100, 50, 350, 250, "Notepad - Untitled");
-                            else show_error_popup();
+void gui(void){
+    mx=fw/2;my=fh/2;save_cur();draw_cur();
+    int tick=0,pb=0;
+    while(1){
+        while(inb(0x64)&1){
+            uint8_t st=inb(0x64),d=inb(0x60);
+            if(st&0x20){
+                if(mc==0){if(d&0x08){md[0]=d;mc++;}}
+                else{md[mc++]=d;if(mc==3){mc=0;
+                    int dx=md[1],dy=md[2];
+                    if(md[0]&0x10)dx|=~0xFF;if(md[0]&0x20)dy|=~0xFF;dy=-dy;
+                    mb=md[0]&0x07;
+                    mx+=dx;my+=dy;
+                    if(mx<0)mx=0;if(my<0)my=0;if(mx>=fw)mx=fw-1;if(my>=fh)my=fh-1;
+                    int clk=(pb==0&&mb==1);pb=mb;
+                    if(clk){
+                        if(mx>=2&&mx<58&&my>=fh-22&&my<fh-2)so=!so;
+                        if(mx>=20&&mx<52&&my>=20&&my<60){wvis=!wvis;if(wvis)winx=80;winy=40;so=0;}
+                        if(mx>=20&&mx<52&&my>=100&&my<140){show_err();so=0;}
+                        if(mx>=20&&mx<52&&my>=180&&my<220){show_err();so=0;}
+                        if(err&&mx>=erx+80&&mx<erx+120&&my>=ery+48&&my<ery+64)err=0;
+                        if(so&&mx>=2&&mx<158&&my>=fh-2-24-4-96&&my<fh-2-4){
+                            int iy=fh-2-24-4-96;
+                            if(my>=iy&&my<iy+24){so=0;wvis=1;winx=80;winy=40;}
+                            else if(my>=iy+24&&my<iy+72){so=0;show_err();}
+                            else if(my>=iy+72&&my<iy+96){so=0;show_err();}
                         }
+                        if(wvis&&mx>=winx+winw-18&&mx<winx+winw-2&&my>=winy&&my<winy+16)wvis=0;
                     }
-                    /* Window close buttons */
-                    for (int i = win_count - 1; i >= 0; i--) {
-                        if (!win_vis[i]) continue;
-                        int wx = win_x[i], wy = win_y[i], ww = win_w[i];
-                        if (in_rect(mouse_x, mouse_y, wx + ww - 18, wy, 16, 16)) {
-                            win_vis[i] = 0;
-                            if (active_win == i) {
-                                active_win = -1;
-                                for (int j = win_count - 1; j >= 0; j--)
-                                    if (win_vis[j]) { active_win = j; break; }
-                            }
-                        }
-                    }
-                    /* Error OK */
-                    if (err_active && in_rect(mouse_x, mouse_y, err_x + 80, err_y + 48, 40, 16))
-                        err_active = 0;
-                    /* Start menu items */
-                    if (start_open) {
-                        for (int i = 0; i < start_count; i++) {
-                            int iy = start_y + 2 + i * 24;
-                            if (in_rect(mouse_x, mouse_y, 2, iy, 156, 22)) {
-                                start_open = 0;
-                                if (i == 0) add_window(100, 50, 350, 250, "Notepad - Untitled");
-                                else if (i == 3) show_error_popup();
-                                else show_error_popup();
-                            }
-                        }
-                    }
-                    /* Window drag */
-                    dragging = -1;
-                    for (int i = win_count - 1; i >= 0; i--) {
-                        if (!win_vis[i]) continue;
-                        int wx = win_x[i], wy = win_y[i], ww = win_w[i];
-                        if (in_rect(mouse_x, mouse_y, wx, wy, ww, 18)) {
-                            active_win = i;
-                            dragging = i;
-                            drag_ox = mouse_x - wx;
-                            drag_oy = mouse_y - wy;
-                            break;
-                        }
-                    }
+                }}
+            }else{
+                char c=0;
+                switch(d){case 0x0E:c='\b';break;case 0x1C:c='\n';break;case 0x39:c=' ';break;
+                    case 0x02:c='1';break;case 0x03:c='2';break;case 0x04:c='3';break;case 0x05:c='4';break;
+                    case 0x06:c='5';break;case 0x07:c='6';break;case 0x08:c='7';break;case 0x09:c='8';break;
+                    case 0x0A:c='9';break;case 0x0B:c='0';break;case 0x0C:c='-';break;case 0x0D:c='=';break;
+                    case 0x10:c='q';break;case 0x11:c='w';break;case 0x12:c='e';break;case 0x13:c='r';break;
+                    case 0x14:c='t';break;case 0x15:c='y';break;case 0x16:c='u';break;case 0x17:c='i';break;
+                    case 0x18:c='o';break;case 0x19:c='p';break;case 0x1A:c='[';break;case 0x1B:c=']';break;
+                    case 0x1E:c='a';break;case 0x1F:c='s';break;case 0x20:c='d';break;case 0x21:c='f';break;
+                    case 0x22:c='g';break;case 0x23:c='h';break;case 0x24:c='j';break;case 0x25:c='k';break;
+                    case 0x26:c='l';break;case 0x27:c=';';break;case 0x28:c='\'';break;case 0x29:c='`';break;
+                    case 0x2B:c='\\';break;case 0x2C:c='z';break;case 0x2D:c='x';break;case 0x2E:c='c';break;
+                    case 0x2F:c='v';break;case 0x30:c='b';break;case 0x31:c='n';break;case 0x32:c='m';break;
+                    case 0x33:c=',';break;case 0x34:c='.';break;case 0x35:c='/';break;case 0x37:c='*';break;
                 }
-                if (mouse_buttons == 1 && dragging >= 0) {
-                    win_x[dragging] = mouse_x - drag_ox;
-                    win_y[dragging] = mouse_y - drag_oy;
-                }
-                if (mouse_buttons == 0) dragging = -1;
-            } else {
-                /* Keyboard */
-                char c = scancode_to_ascii(d);
-                if (c == '\b') { if (notepad_len > 0) notepad_len--; }
-                else if (c == '\n') { if (notepad_len < 1999) notepad_buf[notepad_len++] = '\n'; }
-                else if (c >= 32 && c <= 126) { if (notepad_len < 1999) notepad_buf[notepad_len++] = c; }
+                if(c=='\b'){if(nbl>0)nbl--;}
+                else if(c=='\n'){if(nbl<1999)nbuf[nbl++]='\n';}
+                else if(c>=32&&c<=126){if(nbl<1999)nbuf[nbl++]=c;}
             }
         }
-
-        /* ==== REDRAW ==== */
-        cursor_restore();
-        fill_rect(0, 0, fb_width, fb_height - tbh, DESKTOP);
-        for (int i = 0; i < icon_n; i++) draw_icon(icon_x[i], icon_y_pos[i], icons[i]);
+        rest_cur();
+        fr(0,0,fw,fh-24,CYAN);
+        draw_icon(20,20,"Notepad");draw_icon(20,100,"My PC");draw_icon(20,180,"Calc");
         draw_taskbar();
-        if (start_open) draw_start_menu();
-        for (int i = 0; i < win_count; i++) {
-            if (win_vis[i]) {
-                draw_window_frame(i);
-                if (str_cmp(win_title[i], "Notepad - Untitled") == 0)
-                    draw_notepad(i);
-            }
-        }
-        if (err_active) {
-            fill_rect(err_x, err_y, 200, 70, BTN_FACE);
-            draw_raised_box(err_x, err_y, 200, 70);
-            draw_titlebar(err_x, err_y, 200, "Error", C_RED);
-            draw_string(err_x + 20, err_y + 30, "No filesystem found!", C_BLACK, BTN_FACE);
-            int bx = err_x + 80;
-            fill_rect(bx, err_y + 48, 40, 16, BTN_FACE);
-            draw_raised_box(bx, err_y + 48, 40, 16);
-            draw_string(bx + 10, err_y + 50, "OK", C_BLACK, BTN_FACE);
-        }
-        cursor_save();
-        cursor_draw();
-
-        /* Random errors */
-        tick++;
-        if (!err_active && (tick % (5000000 + rand_val() % 3000000)) == 0) show_error_popup();
-        if (err_active) { err_timer--; if (err_timer <= 0) err_active = 0; }
-
-        for (volatile int dly = 0; dly < 300; dly++);
+        if(so){int sy=fh-24-4*24-4;fr(2,sy,160,4*24+4,LGRAY);rbox(2,sy,160,4*24+4);ds(10,sy+4,"Notepad",BLACK,LGRAY);ds(10,sy+28,"My PC",BLACK,LGRAY);ds(10,sy+52,"Calculator",BLACK,LGRAY);ds(10,sy+76,"Shut Down",BLACK,LGRAY);}
+        draw_win();
+        if(err){fr(erx,ery,200,70,LGRAY);rbox(erx,ery,200,70);fr(erx,ery,200,18,RED);ds(erx+4,ery+2,"Error",WHITE,RED);ds(erx+20,ery+30,"No filesystem found!",BLACK,LGRAY);int bx=erx+80;fr(bx,ery+48,40,16,LGRAY);rbox(bx,ery+48,40,16);ds(bx+10,ery+50,"OK",BLACK,LGRAY);ert--;if(ert<=0)err=0;}
+        save_cur();draw_cur();
+        tick++;if(!err&&(tick%4000000==0))show_err();
+        for(volatile int dly=0;dly<500;dly++);
     }
 }
