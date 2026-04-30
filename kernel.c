@@ -1,7 +1,7 @@
-/* kernel.c - TinyFoxyDOS - Text-based Linux Installer OS */
+/* kernel.c - TinyFoxyDOS Windows 95-like Graphical OS */
 #include <stdint.h>
 
-/* I/O ports */
+/* ============ I/O PORTS ============ */
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -12,392 +12,520 @@ static inline uint8_t inb(uint16_t port) {
 }
 static inline void io_wait(void) { outb(0x80, 0); }
 
-/* VGA text mode */
-static volatile uint16_t *const vga = (uint16_t *)0xB8000;
-#define VGA_COLS 80
-#define VGA_ROWS 25
-static int cursor_x = 0, cursor_y = 0;
+/* ============ COLORS (VGA Palette) ============ */
+#define COLOR_BLACK       0
+#define COLOR_BLUE        1
+#define COLOR_GREEN       2
+#define COLOR_CYAN        3
+#define COLOR_RED         4
+#define COLOR_MAGENTA     5
+#define COLOR_BROWN       6
+#define COLOR_LIGHTGRAY   7
+#define COLOR_DARKGRAY    8
+#define COLOR_LIGHTBLUE   9
+#define COLOR_LIGHTGREEN  10
+#define COLOR_LIGHTCYAN   11
+#define COLOR_LIGHTRED    12
+#define COLOR_LIGHTMAGENTA 13
+#define COLOR_YELLOW      14
+#define COLOR_WHITE       15
 
-/* VGA colors */
-#define VGA_BLACK       0x00
-#define VGA_BLUE        0x01
-#define VGA_GREEN       0x02
-#define VGA_CYAN        0x03
-#define VGA_RED         0x04
-#define VGA_MAGENTA     0x05
-#define VGA_BROWN       0x06
-#define VGA_LIGHTGRAY   0x07
-#define VGA_DARKGRAY    0x08
-#define VGA_LIGHTBLUE   0x09
-#define VGA_LIGHTGREEN  0x0A
-#define VGA_LIGHTCYAN   0x0B
-#define VGA_LIGHTRED    0x0C
-#define VGA_LIGHTMAGENTA 0x0D
-#define VGA_YELLOW      0x0E
-#define VGA_WHITE       0x0F
+/* Windows 95 theme */
+#define WIN_DESKTOP       0x02  /* Dark teal */
+#define WIN_TASKBAR       0x07  /* Light gray */
+#define WIN_TITLE_ACTIVE  0x09  /* Blue */
+#define WIN_TITLE_INACTIVE 0x08 /* Dark gray */
+#define WIN_BUTTON_FACE   0x07  /* Light gray */
+#define WIN_BUTTON_SHADOW 0x08  /* Dark gray */
+#define WIN_WINDOW_BG     0x0F  /* White */
+#define WIN_BORDER_LIGHT  0x0F  /* White */
+#define WIN_BORDER_DARK   0x08  /* Dark gray */
+#define WIN_TEXT          0x00  /* Black */
+#define WIN_TEXT_WHITE    0x0F  /* White */
+#define WIN_TASKBAR_TEXT  0x00  /* Black */
+#define WIN_HIGHLIGHT     0x09  /* Blue highlight */
+#define WIN_ERROR_RED     0x04  /* Red for error title */
 
-/* App state */
-#define HISTORY_MAX 50
-static char history[HISTORY_MAX][80];
-static int history_count = 0;
-static char input_buffer[256];
-static int input_len = 0;
-static const char *username = "tfd";
-static const char *hostname = "tinyfoxydos";
-static const char *current_dir = "/home/tfd";
-static int network_connected = 1;
-static int screen_mode = 0;
-static int booted = 0;
-
-/* Distros */
-static const char *distro_names[] = {
-    "Arch Linux", "Ubuntu 22.04 LTS", "Ubuntu 24.04 LTS",
-    "Linux Mint", "Debian 12", "Fedora 40",
-    "Manjaro", "Pop!_OS", "CentOS Stream 9",
-    "OpenSUSE", "EndeavourOS", "Garuda Linux"
-};
-static const char *distro_sizes[] = {
-    "800MB", "4.5GB", "4.8GB", "2.7GB", "3.6GB", "2.5GB",
-    "3.2GB", "3.5GB", "2.8GB", "3.0GB", "2.2GB", "2.9GB"
-};
-static const char *distro_types[] = {
-    "Rolling", "LTS", "LTS", "Stable", "Stable", "Stable",
-    "Rolling", "LTS", "Stable", "Stable", "Rolling", "Rolling"
-};
-
-/* ============ STRING HELPERS (MUST BE FIRST!) ============ */
-static int str_len(const char *s) {
-    int n = 0; while (s[n]) n++; return n;
+static void set_teal_palette(void) {
+    outb(0x3C8, 0);
+    static const uint8_t pal[16][3] = {
+        {0x00,0x00,0x00}, {0x00,0x00,0xAA}, {0x00,0x80,0x80}, {0x00,0xAA,0xAA},
+        {0xAA,0x00,0x00}, {0xAA,0x00,0xAA}, {0xAA,0x55,0x00}, {0xC0,0xC0,0xC0},
+        {0x80,0x80,0x80}, {0x55,0x55,0xFF}, {0x55,0xFF,0x55}, {0x55,0xFF,0xFF},
+        {0xFF,0x55,0x55}, {0xFF,0x55,0xFF}, {0xFF,0xFF,0x55}, {0xFF,0xFF,0xFF}
+    };
+    for (int i = 0; i < 16; i++) {
+        outb(0x3C9, pal[i][0]/4); outb(0x3C9, pal[i][1]/4); outb(0x3C9, pal[i][2]/4);
+    }
+    for (int i = 16; i < 256; i++) { outb(0x3C9, 0); outb(0x3C9, 0); outb(0x3C9, 0); }
 }
+
+/* ============ FRAMEBUFFER ============ */
+static uint8_t *fb;
+static int fb_pitch, fb_width, fb_height;
+
+/* ============ MOUSE STATE ============ */
+static int mouse_x, mouse_y, mouse_cycle;
+static uint8_t mouse_bytes[3];
+static int mouse_buttons = 0; /* 1=left, 2=right, 3=both */
+static int mouse_clicked = 0;
+
+/* ============ KEYBOARD STATE ============ */
+static int kb_shift = 0;
+static int kb_tab_select = 0; /* Tab to switch between clickable items */
+
+/* ============ WINDOWS ============ */
+#define MAX_WINDOWS 10
+static int window_count = 0;
+static int window_x[MAX_WINDOWS], window_y[MAX_WINDOWS];
+static int window_w[MAX_WINDOWS], window_h[MAX_WINDOWS];
+static const char *window_title[MAX_WINDOWS];
+static int window_visible[MAX_WINDOWS];
+static int window_active = -1;
+static int dragging = -1;
+static int drag_off_x, drag_off_y;
+
+/* Notepad text */
+static char notepad_text[3200];
+static int notepad_len = 0;
+static int notepad_scroll = 0;
+
+/* Start menu */
+static int start_menu_open = 0;
+static int start_menu_x = 2, start_menu_y;
+static const char *start_items[] = {"Programs", "Documents", "Settings", "Run...", "Shut Down..."};
+static int start_item_count = 5;
+
+/* Desktop icons */
+static const char *icon_labels[] = {"My PC", "Notepad", "Calc"};
+static int icon_x[] = {20, 20, 20};
+static int icon_y[] = {20, 100, 180};
+static int icon_count = 3;
+
+/* Error popup */
+static int error_active = 0, error_timer = 0;
+static int error_x, error_y, error_w, error_h;
+static uint8_t error_bg[300*80];
+
+/* Taskbar */
+static int taskbar_h = 24;
+static int clock_visible = 1;
+
+/* ============ RAND ============ */
+static uint32_t seed = 0xDEADBEEF;
+static uint32_t rand(void) {
+    seed = (1103515245 * seed + 12345) & 0x7FFFFFFF;
+    return seed;
+}
+
+/* ============ PIXEL DRAWING ============ */
+static inline void putpixel(int x, int y, uint8_t c) {
+    if (x >= 0 && x < fb_width && y >= 0 && y < fb_height)
+        fb[y * fb_pitch + x] = c;
+}
+
+static void fill_rect(int x, int y, int w, int h, uint8_t c) {
+    for (int dy = 0; dy < h; dy++)
+        for (int dx = 0; dx < w; dx++)
+            putpixel(x + dx, y + dy, c);
+}
+
+static void hline(int x, int y, int w, uint8_t c) {
+    for (int i = 0; i < w; i++) putpixel(x + i, y, c);
+}
+static void vline(int x, int y, int h, uint8_t c) {
+    for (int i = 0; i < h; i++) putpixel(x, y + i, c);
+}
+
+/* ============ 3D BORDERS ============ */
+static void draw_raised_box(int x, int y, int w, int h) {
+    hline(x, y, w, WIN_BORDER_LIGHT);
+    vline(x, y, h, WIN_BORDER_LIGHT);
+    hline(x, y + h - 1, w, WIN_BORDER_DARK);
+    vline(x + w - 1, y, h, WIN_BORDER_DARK);
+    if (w > 2 && h > 2) {
+        hline(x + 1, y + 1, w - 2, WIN_BORDER_LIGHT);
+        vline(x + 1, y + 1, h - 2, WIN_BORDER_LIGHT);
+        hline(x + 1, y + h - 2, w - 2, WIN_BORDER_DARK);
+        vline(x + w - 2, y + 1, h - 2, WIN_BORDER_DARK);
+    }
+}
+
+static void draw_sunken_box(int x, int y, int w, int h) {
+    hline(x, y, w, WIN_BORDER_DARK);
+    vline(x, y, h, WIN_BORDER_DARK);
+    hline(x, y + h - 1, w, WIN_BORDER_LIGHT);
+    vline(x + w - 1, y, h, WIN_BORDER_LIGHT);
+}
+
+/* ============ 8x8 FONT ============ */
+static const uint8_t font8x8[95][8] = {
+    [0]={0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    [1]={0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00},
+    [2]={0x66,0x66,0x24,0x00,0x00,0x00,0x00,0x00},
+    [3]={0x6C,0x6C,0xFE,0x6C,0xFE,0x6C,0x6C,0x00},
+    [4]={0x18,0x3E,0x60,0x3C,0x06,0x7C,0x18,0x00},
+    [5]={0x00,0x66,0xAC,0xD8,0x36,0x6A,0xD6,0x00},
+    [6]={0x38,0x6C,0x38,0x76,0xDC,0xCC,0x76,0x00},
+    [7]={0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00},
+    [8]={0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00},
+    [9]={0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00},
+    [10]={0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00},
+    [11]={0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00},
+    [12]={0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30},
+    [13]={0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00},
+    [14]={0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00},
+    [15]={0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00},
+    [16]={0x7C,0xC6,0xCE,0xDE,0xF6,0xE6,0x7C,0x00},
+    [17]={0x18,0x38,0x78,0x18,0x18,0x18,0x7E,0x00},
+    [18]={0x7C,0xC6,0x06,0x1C,0x30,0x66,0xFE,0x00},
+    [19]={0x7C,0xC6,0x06,0x3C,0x06,0xC6,0x7C,0x00},
+    [20]={0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x0C,0x00},
+    [21]={0xFE,0xC0,0xFC,0x06,0x06,0xC6,0x7C,0x00},
+    [22]={0x38,0x60,0xC0,0xFC,0xC6,0xC6,0x7C,0x00},
+    [23]={0xFE,0xC6,0x0C,0x18,0x30,0x30,0x30,0x00},
+    [24]={0x7C,0xC6,0xC6,0x7C,0xC6,0xC6,0x7C,0x00},
+    [25]={0x7C,0xC6,0xC6,0x7E,0x06,0x0C,0x78,0x00},
+    [26]={0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00},
+    [27]={0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x30},
+    [28]={0x06,0x0C,0x18,0x30,0x18,0x0C,0x06,0x00},
+    [29]={0x00,0x00,0x7E,0x00,0x00,0x7E,0x00,0x00},
+    [30]={0x60,0x30,0x18,0x0C,0x18,0x30,0x60,0x00},
+    [31]={0x7C,0xC6,0x0C,0x18,0x18,0x00,0x18,0x00},
+    [32]={0x7C,0xC6,0xDE,0xDE,0xDE,0xC0,0x78,0x00},
+    [33]={0x38,0x6C,0xC6,0xFE,0xC6,0xC6,0xC6,0x00},
+    [34]={0xFC,0x66,0x66,0x7C,0x66,0x66,0xFC,0x00},
+    [35]={0x3C,0x66,0xC0,0xC0,0xC0,0x66,0x3C,0x00},
+    [36]={0xF8,0x6C,0x66,0x66,0x66,0x6C,0xF8,0x00},
+    [37]={0xFE,0x62,0x68,0x78,0x68,0x62,0xFE,0x00},
+    [38]={0xFE,0x62,0x68,0x78,0x68,0x60,0xF0,0x00},
+    [39]={0x3C,0x66,0xC0,0xDE,0xC6,0x66,0x3A,0x00},
+    [40]={0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0x00},
+    [41]={0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00},
+    [42]={0x1E,0x0C,0x0C,0x0C,0xCC,0xCC,0x78,0x00},
+    [43]={0xE6,0x66,0x6C,0x78,0x6C,0x66,0xE6,0x00},
+    [44]={0xF0,0x60,0x60,0x60,0x62,0x66,0xFE,0x00},
+    [45]={0xC6,0xEE,0xFE,0xD6,0xC6,0xC6,0xC6,0x00},
+    [46]={0xC6,0xE6,0xF6,0xDE,0xCE,0xC6,0xC6,0x00},
+    [47]={0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00},
+    [48]={0xFC,0x66,0x66,0x7C,0x60,0x60,0xF0,0x00},
+    [49]={0x7C,0xC6,0xC6,0xC6,0xC6,0xD6,0x7C,0x06},
+    [50]={0xFC,0x66,0x66,0x7C,0x6C,0x66,0xE6,0x00},
+    [51]={0x7C,0xC6,0x60,0x38,0x0C,0xC6,0x7C,0x00},
+    [52]={0x7E,0x5A,0x18,0x18,0x18,0x18,0x3C,0x00},
+    [53]={0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00},
+    [54]={0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x10,0x00},
+    [55]={0xC6,0xC6,0xC6,0xD6,0xFE,0xEE,0xC6,0x00},
+    [56]={0xC6,0xC6,0x6C,0x38,0x38,0x6C,0xC6,0x00},
+    [57]={0x66,0x66,0x66,0x3C,0x18,0x18,0x3C,0x00},
+    [58]={0xFE,0xC6,0x8C,0x18,0x32,0x66,0xFE,0x00},
+    [59]={0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00},
+    [60]={0xC0,0x60,0x30,0x18,0x0C,0x06,0x02,0x00},
+    [61]={0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00},
+    [62]={0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00},
+    [63]={0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF},
+    [64]={0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00},
+    [65]={0x00,0x00,0x78,0x0C,0x7C,0xCC,0x76,0x00},
+    [66]={0xE0,0x60,0x7C,0x66,0x66,0x66,0xDC,0x00},
+    [67]={0x00,0x00,0x7C,0xC6,0xC0,0xC6,0x7C,0x00},
+    [68]={0x1C,0x0C,0x7C,0xCC,0xCC,0xCC,0x76,0x00},
+    [69]={0x00,0x00,0x7C,0xC6,0xFE,0xC0,0x7C,0x00},
+    [70]={0x38,0x6C,0x60,0xF0,0x60,0x60,0xF0,0x00},
+    [71]={0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0x78},
+    [72]={0xE0,0x60,0x6C,0x76,0x66,0x66,0xE6,0x00},
+    [73]={0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00},
+    [74]={0x0C,0x00,0x0C,0x0C,0x0C,0xCC,0xCC,0x78},
+    [75]={0xE0,0x60,0x66,0x6C,0x78,0x6C,0xE6,0x00},
+    [76]={0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00},
+    [77]={0x00,0x00,0xEC,0xFE,0xD6,0xC6,0xC6,0x00},
+    [78]={0x00,0x00,0xDC,0x66,0x66,0x66,0x66,0x00},
+    [79]={0x00,0x00,0x7C,0xC6,0xC6,0xC6,0x7C,0x00},
+    [80]={0x00,0x00,0xDC,0x66,0x66,0x7C,0x60,0xF0},
+    [81]={0x00,0x00,0x76,0xCC,0xCC,0x7C,0x0C,0x1E},
+    [82]={0x00,0x00,0xDC,0x76,0x60,0x60,0xF0,0x00},
+    [83]={0x00,0x00,0x7C,0xC0,0x7C,0x06,0xFC,0x00},
+    [84]={0x30,0x30,0xFC,0x30,0x30,0x36,0x1C,0x00},
+    [85]={0x00,0x00,0xC6,0xC6,0xC6,0xC6,0x76,0x00},
+    [86]={0x00,0x00,0xC6,0xC6,0xC6,0x6C,0x38,0x00},
+    [87]={0x00,0x00,0xC6,0xC6,0xD6,0xFE,0x6C,0x00},
+    [88]={0x00,0x00,0xC6,0x6C,0x38,0x6C,0xC6,0x00},
+    [89]={0x00,0x00,0xC6,0xC6,0xC6,0x7E,0x06,0xFC},
+    [90]={0x00,0x00,0xFE,0x8C,0x18,0x32,0xFE,0x00},
+    [91]={0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00},
+    [92]={0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00},
+    [93]={0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00},
+    [94]={0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00}
+};
+
+static void draw_char(int x, int y, char c, uint8_t fg, uint8_t bg) {
+    if (c < 32 || c > 126) return;
+    const uint8_t *g = font8x8[c - 32];
+    for (int row = 0; row < 8; row++) {
+        uint8_t bits = g[row];
+        for (int col = 0; col < 8; col++) {
+            int px = x + col, py = y + row;
+            if (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
+                fb[py * fb_pitch + px] = (bits & (0x80 >> col)) ? fg : bg;
+        }
+    }
+}
+
+static void draw_string(int x, int y, const char *s, uint8_t fg, uint8_t bg) {
+    while (*s) { draw_char(x, y, *s++, fg, bg); x += 8; }
+}
+
+static int str_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
 static int str_cmp(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
     return *a - *b;
 }
-static int str_contains(const char *haystack, const char *needle) {
-    int nlen = str_len(needle);
-    if (nlen == 0) return 1;
-    while (*haystack) {
-        int match = 1;
-        for (int i = 0; i < nlen; i++) {
-            if (haystack[i] != needle[i]) { match = 0; break; }
+
+/* ============ TITLE BAR ============ */
+static void draw_titlebar(int x, int y, int w, const char *title, uint8_t color) {
+    fill_rect(x, y, w, 18, color);
+    draw_string(x + 4, y + 2, title, WIN_TEXT_WHITE, color);
+    /* Close button */
+    int bx = x + w - 18;
+    fill_rect(bx, y, 16, 16, WIN_BUTTON_FACE);
+    draw_raised_box(bx, y, 16, 16);
+    draw_char(bx + 4, y + 2, 'X', WIN_TEXT, WIN_BUTTON_FACE);
+    /* Minimize */
+    bx -= 18;
+    fill_rect(bx, y, 16, 16, WIN_BUTTON_FACE);
+    draw_raised_box(bx, y, 16, 16);
+    draw_char(bx + 5, y + 8, '_', WIN_TEXT, WIN_BUTTON_FACE);
+    /* Maximize */
+    bx -= 18;
+    fill_rect(bx, y, 16, 16, WIN_BUTTON_FACE);
+    draw_raised_box(bx, y, 16, 16);
+    draw_char(bx + 4, y + 2, 127, WIN_TEXT, WIN_BUTTON_FACE);
+}
+
+/* ============ MOUSE CURSOR (Triangle Arrow) ============ */
+static uint8_t cursor_bg[20*20];
+
+static void cursor_save(void) {
+    int idx = 0;
+    for (int dy = 0; dy < 20; dy++)
+        for (int dx = 0; dx < 20; dx++) {
+            int px = mouse_x + dx, py = mouse_y + dy;
+            cursor_bg[idx++] = (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
+                               ? fb[py * fb_pitch + px] : 0;
         }
-        if (match) return 1;
-        haystack++;
-    }
-    return 0;
-}
-static int copy_str(char *dst, const char *src) {
-    int n = 0;
-    while (src[n]) { dst[n] = src[n]; n++; }
-    dst[n] = 0;
-    return n;
-}
-static int print_num(char *buf, int num) {
-    if (num == 0) { buf[0] = '0'; buf[1] = 0; return 1; }
-    int n = 0, tmp = num;
-    while (tmp) { tmp /= 10; n++; }
-    buf[n] = 0;
-    for (int i = n - 1; i >= 0; i--) { buf[i] = '0' + (num % 10); num /= 10; }
-    return n;
 }
 
-/* ============ SCREEN FUNCTIONS ============ */
-static void set_cursor(int x, int y) {
-    uint16_t pos = y * VGA_COLS + x;
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
-    cursor_x = x; cursor_y = y;
-}
-static void hide_cursor(void) {
-    outb(0x3D4, 0x0A);
-    outb(0x3D5, 0x20);
-}
-static void show_cursor(void) {
-    outb(0x3D4, 0x0A); outb(0x3D5, 0x0E);
-    outb(0x3D4, 0x0B); outb(0x3D5, 0x0F);
-}
-static void putchar_at(int x, int y, char c, uint8_t color) {
-    if (x >= 0 && x < VGA_COLS && y >= 0 && y < VGA_ROWS)
-        vga[y * VGA_COLS + x] = (uint16_t)c | ((uint16_t)color << 8);
-}
-static void clear_screen(void) {
-    for (int i = 0; i < VGA_COLS * VGA_ROWS; i++)
-        vga[i] = (uint16_t)' ' | ((uint16_t)VGA_LIGHTGRAY << 8);
-    set_cursor(0, 0);
-}
-static void scroll_up(void) {
-    for (int y = 0; y < VGA_ROWS - 1; y++)
-        for (int x = 0; x < VGA_COLS; x++)
-            vga[y * VGA_COLS + x] = vga[(y + 1) * VGA_COLS + x];
-    for (int x = 0; x < VGA_COLS; x++)
-        vga[(VGA_ROWS - 1) * VGA_COLS + x] = (uint16_t)' ' | ((uint16_t)VGA_LIGHTGRAY << 8);
-}
-static void printc(const char *s, uint8_t color) {
-    while (*s) {
-        if (*s == '\n') {
-            cursor_x = 0; cursor_y++;
-            if (cursor_y >= VGA_ROWS) { scroll_up(); cursor_y = VGA_ROWS - 1; }
-        } else {
-            putchar_at(cursor_x, cursor_y, *s, color);
-            cursor_x++;
-            if (cursor_x >= VGA_COLS) { cursor_x = 0; cursor_y++;
-                if (cursor_y >= VGA_ROWS) { scroll_up(); cursor_y = VGA_ROWS - 1; } }
+static void cursor_restore(void) {
+    int idx = 0;
+    for (int dy = 0; dy < 20; dy++)
+        for (int dx = 0; dx < 20; dx++) {
+            int px = mouse_x + dx, py = mouse_y + dy;
+            if (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
+                fb[py * fb_pitch + px] = cursor_bg[idx];
+            idx++;
         }
-        s++;
+}
+
+static void cursor_draw(void) {
+    /* White triangle arrow */
+    static const int arrow[20][20] = {
+        {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0},
+        {1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,1,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {1,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+    };
+    for (int dy = 0; dy < 20; dy++)
+        for (int dx = 0; dx < 20; dx++)
+            if (arrow[dy][dx])
+                putpixel(mouse_x + dx, mouse_y + dy, COLOR_WHITE);
+}
+
+static void move_cursor(int nx, int ny) {
+    if (nx < 0) nx = 0;
+    if (ny < 0) ny = 0;
+    if (nx >= fb_width) nx = fb_width - 1;
+    if (ny >= fb_height) ny = fb_height - 1;
+    if (nx == mouse_x && ny == mouse_y) return;
+    cursor_restore();
+    mouse_x = nx; mouse_y = ny;
+    cursor_save();
+    cursor_draw();
+}
+
+/* ============ CHECK MOUSE CLICK ============ */
+static int in_rect(int mx, int my, int x, int y, int w, int h) {
+    return (mx >= x && mx < x + w && my >= y && my < y + h);
+}
+
+/* ============ ERROR POPUP ============ */
+static void show_error(void) {
+    const char *msgs[] = {"No filesystem found!", "Cannot read drive C:",
+                          "Access denied!", "File not found!"};
+    int idx = rand() % 4;
+    error_w = str_len(msgs[idx]) * 8 + 40;
+    error_h = 60;
+    error_x = (fb_width - error_w) / 2;
+    error_y = (fb_height - error_h) / 2;
+    int bi = 0;
+    for (int dy = 0; dy < error_h; dy++)
+        for (int dx = 0; dx < error_w; dx++) {
+            int px = error_x + dx, py = error_y + dy;
+            error_bg[bi++] = (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
+                             ? fb[py * fb_pitch + px] : 0;
+        }
+    fill_rect(error_x, error_y, error_w, error_h, WIN_BUTTON_FACE);
+    draw_raised_box(error_x, error_y, error_w, error_h);
+    draw_titlebar(error_x, error_y, error_w, "Error", WIN_ERROR_RED);
+    draw_string(error_x + 20, error_y + 26, msgs[idx], WIN_TEXT, WIN_BUTTON_FACE);
+    int bx = error_x + error_w / 2 - 20;
+    fill_rect(bx, error_y + 42, 40, 14, WIN_BUTTON_FACE);
+    draw_raised_box(bx, error_y + 42, 40, 14);
+    draw_string(bx + 8, error_y + 44, "OK", WIN_TEXT, WIN_BUTTON_FACE);
+    error_active = 1; error_timer = 300000;
+}
+
+static void hide_error(void) {
+    int bi = 0;
+    for (int dy = 0; dy < error_h; dy++)
+        for (int dx = 0; dx < error_w; dx++) {
+            int px = error_x + dx, py = error_y + dy;
+            if (px >= 0 && px < fb_width && py >= 0 && py < fb_height)
+                fb[py * fb_pitch + px] = error_bg[bi];
+            bi++;
+        }
+    error_active = 0;
+}
+
+/* ============ DESKTOP ============ */
+static void draw_desktop(void) {
+    fill_rect(0, 0, fb_width, fb_height - taskbar_h, WIN_DESKTOP);
+}
+
+static void draw_desktop_icon(int x, int y, const char *label) {
+    /* Simple icon box */
+    fill_rect(x, y, 32, 32, WIN_DESKTOP);
+    fill_rect(x + 2, y + 2, 28, 28, COLOR_WHITE);
+    draw_raised_box(x + 2, y + 2, 28, 28);
+    /* Blue header on icon */
+    fill_rect(x + 4, y + 4, 24, 8, COLOR_BLUE);
+    /* Lines */
+    hline(x + 6, y + 16, 20, COLOR_DARKGRAY);
+    hline(x + 6, y + 19, 14, COLOR_DARKGRAY);
+    hline(x + 6, y + 22, 16, COLOR_DARKGRAY);
+    /* Label */
+    int len = str_len(label);
+    int tx = x + (32 - len * 8) / 2;
+    for (int i = 0; i < len; i++)
+        draw_char(tx + i * 8, y + 34, label[i], COLOR_WHITE, WIN_DESKTOP);
+}
+
+static void draw_taskbar(void) {
+    fill_rect(0, fb_height - taskbar_h, fb_width, taskbar_h, WIN_TASKBAR);
+    hline(0, fb_height - taskbar_h, fb_width, COLOR_WHITE);
+    /* Start button */
+    int sx = 2, sy = fb_height - taskbar_h + 2, sw = 56, sh = 20;
+    fill_rect(sx, sy, sw, sh, WIN_BUTTON_FACE);
+    draw_raised_box(sx, sy, sw, sh);
+    draw_string(sx + 8, sy + 2, "Start", WIN_TEXT, WIN_BUTTON_FACE);
+    /* Clock */
+    int cx = fb_width - 56;
+    draw_sunken_box(cx, fb_height - taskbar_h + 2, 52, 20);
+    draw_string(cx + 8, fb_height - taskbar_h + 4, "12:00", WIN_TEXT, WIN_BUTTON_FACE);
+}
+
+/* ============ START MENU ============ */
+static void draw_start_menu(void) {
+    int sx = start_menu_x, sy = fb_height - taskbar_h - start_item_count * 24 - 4;
+    start_menu_y = sy;
+    int sw = 160, sh = start_item_count * 24 + 4;
+    fill_rect(sx, sy, sw, sh, WIN_BUTTON_FACE);
+    draw_raised_box(sx, sy, sw, sh);
+    for (int i = 0; i < start_item_count; i++) {
+        int iy = sy + 2 + i * 24;
+        fill_rect(sx + 2, iy, sw - 4, 22, WIN_BUTTON_FACE);
+        draw_string(sx + 8, iy + 3, start_items[i], WIN_TEXT, WIN_BUTTON_FACE);
+        if (i == kb_tab_select && !start_menu_open) {}
     }
-    set_cursor(cursor_x, cursor_y);
-}
-static void println(const char *s, uint8_t color) { printc(s, color); printc("\n", color); }
-static void print_prompt(void) {
-    printc(username, VGA_GREEN); printc("@", VGA_LIGHTGRAY);
-    printc(hostname, VGA_LIGHTCYAN); printc(":", VGA_LIGHTGRAY);
-    printc(current_dir, VGA_YELLOW); printc("$ ", VGA_WHITE);
-}
-static void delay(int ms) { for (volatile int i = 0; i < ms * 1000; i++); }
-
-/* ============ BANNER ============ */
-static void print_banner(void) {
-    clear_screen();
-    println("", 0);
-    println("======================================================================", VGA_CYAN);
-    println("                                                                      ", VGA_CYAN);
-    println("     ___________ _____    ______     ______  ___________               ", VGA_CYAN);
-    println("     \\__    ___/ \\__  \\   \\____ \\    \\____ \\ \\_   _____/               ", VGA_CYAN);
-    println("       |    |     / __ \\_  |  |_> >   |  |_> > |    __)_               ", VGA_CYAN);
-    println("       |    |    (____  /  |   __/    |   __/  |        \\              ", VGA_CYAN);
-    println("       |____|         \\/   |__|       |__|    /_______  /              ", VGA_CYAN);
-    println("                                                       \\/               ", VGA_CYAN);
-    println("                                                                      ", VGA_CYAN);
-    println("                   TEXT-BASED LINUX INSTALLER                         ", VGA_CYAN);
-    println("           by foxydos and foxydox software by sadman                  ", VGA_CYAN);
-    println("======================================================================", VGA_CYAN);
-    println("", 0);
-    println("Type 'help' for commands | 'list' to see available Linux distros", VGA_YELLOW);
-    println("", 0);
 }
 
-/* ============ COMMANDS ============ */
-static void cmd_help(void) {
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    println("Available Commands:", VGA_YELLOW);
-    println("  help              - Show this help message", VGA_WHITE);
-    println("  list              - List available Linux distributions", VGA_WHITE);
-    println("  install <name>    - Install a Linux distribution", VGA_WHITE);
-    println("  boot <distro>     - Boot an installed Linux distribution", VGA_WHITE);
-    println("  netstat           - Show network status", VGA_WHITE);
-    println("  clear             - Clear screen", VGA_WHITE);
-    println("  about             - About TinyFoxyDOS", VGA_WHITE);
-    println("  reboot            - Reboot system", VGA_WHITE);
-    println("  shutdown          - Shutdown system", VGA_WHITE);
-    println("  history           - Show command history", VGA_WHITE);
-    println("  exit              - Exit to boot menu", VGA_WHITE);
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
+/* ============ WINDOW MANAGEMENT ============ */
+static int create_window(int x, int y, int w, int h, const char *title) {
+    if (window_count >= MAX_WINDOWS) return -1;
+    int i = window_count++;
+    window_x[i] = x; window_y[i] = y;
+    window_w[i] = w; window_h[i] = h;
+    window_title[i] = title;
+    window_visible[i] = 1;
+    window_active = i;
+    return i;
 }
 
-static void cmd_list(void) {
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    println("Available Linux Distributions:", VGA_YELLOW);
-    println("  No.   Distribution                 Size        Type", VGA_WHITE);
-    println("------------------------------------------------------------------", VGA_CYAN);
-    for (int i = 0; i < 12; i++) {
-        char buf[80];
-        int n = 0;
-        buf[n++] = ' '; buf[n++] = ' ';
-        n += print_num(buf + n, i + 1);
-        while (n < 7) buf[n++] = ' ';
-        n += copy_str(buf + n, distro_names[i]);
-        while (n < 36) buf[n++] = ' ';
-        n += copy_str(buf + n, distro_sizes[i]);
-        while (n < 48) buf[n++] = ' ';
-        copy_str(buf + n, distro_types[i]);
-        println(buf, VGA_WHITE);
+static void draw_window_frame(int idx) {
+    if (!window_visible[idx]) return;
+    int x = window_x[idx], y = window_y[idx];
+    int w = window_w[idx], h = window_h[idx];
+    uint8_t title_color = (idx == window_active) ? WIN_TITLE_ACTIVE : WIN_TITLE_INACTIVE;
+    fill_rect(x, y, w, h, WIN_WINDOW_BG);
+    draw_titlebar(x, y, w, window_title[idx], title_color);
+    draw_raised_box(x, y + 18, w, h - 18);
+}
+
+static void draw_notepad_content(int idx) {
+    int x = window_x[idx] + 4, y = window_y[idx] + 22;
+    int max_cols = (window_w[idx] - 8) / 8;
+    int max_rows = (window_h[idx] - 40) / 8;
+    fill_rect(x, y, max_cols * 8, max_rows * 8, COLOR_WHITE);
+    int line_start = 0, dl = 0;
+    while (dl < notepad_scroll && line_start < notepad_len) {
+        while (line_start < notepad_len && notepad_text[line_start] != '\n') line_start++;
+        if (line_start < notepad_len) line_start++;
+        dl++;
     }
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
-}
-
-static void cmd_netstat(void) {
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    println("Network Status:", VGA_YELLOW);
-    if (network_connected) {
-        println("  + Ethernet Connected", VGA_GREEN);
-        println("  + WiFi: TFD-Net", VGA_GREEN);
-        println("  + IP Address: 192.168.1.100", VGA_GREEN);
-        println("  + Gateway: 192.168.1.1", VGA_GREEN);
-        println("  + DNS: 8.8.8.8", VGA_GREEN);
-        println("  + Internet: Available", VGA_GREEN);
-    } else {
-        println("  x No Network Connection", VGA_RED);
-        println("  x Run 'netconnect' to setup WiFi", VGA_YELLOW);
+    for (int row = 0; row < max_rows && line_start < notepad_len; row++) {
+        int col = 0, cur = line_start;
+        while (cur < notepad_len && notepad_text[cur] != '\n' && col < max_cols) {
+            draw_char(x + col * 8, y + row * 8, notepad_text[cur], WIN_TEXT, COLOR_WHITE);
+            cur++; col++;
+        }
+        line_start = cur + 1;
     }
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
 }
 
-static void cmd_about(void) {
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    println("TinyFoxyDOS - Linux Installer & Boot Manager", VGA_YELLOW);
-    println("Version: 2.0", VGA_WHITE);
-    println("License: Open Source", VGA_WHITE);
-    println("Features:", VGA_GREEN);
-    println("  * Install 12+ Linux distributions", VGA_WHITE);
-    println("  * Direct download from official mirrors", VGA_WHITE);
-    println("  * GRUB bootloader integration", VGA_WHITE);
-    println("  * Network setup wizard", VGA_WHITE);
-    println("  * Multi-boot support", VGA_WHITE);
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
-}
-
-static void cmd_history(void) {
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    println("Command History:", VGA_YELLOW);
-    for (int i = 0; i < history_count; i++) {
-        char buf[80];
-        int n = 0;
-        buf[n++] = ' '; buf[n++] = ' ';
-        n += print_num(buf + n, i + 1);
-        while (n < 6) buf[n++] = ' ';
-        buf[n++] = ' '; buf[n++] = ' ';
-        copy_str(buf + n, history[i]);
-        println(buf, VGA_WHITE);
+static void close_window(int idx) {
+    window_visible[idx] = 0;
+    if (window_active == idx) {
+        window_active = -1;
+        for (int i = 0; i < window_count; i++)
+            if (window_visible[i]) window_active = i;
     }
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
 }
 
-static void fake_download(const char *name) {
-    char buf[80];
-    copy_str(buf, "Downloading ");
-    copy_str(buf + 11, name);
-    copy_str(buf + 11 + str_len(name), "...");
-    println(buf, VGA_YELLOW);
-    for (int i = 0; i <= 100; i += 10) {
-        printc("  Progress: [", VGA_GREEN);
-        for (int j = 0; j < 50; j++)
-            printc((j < i / 2) ? "=" : " ", VGA_GREEN);
-        printc("] ", VGA_GREEN);
-        char pct[6];
-        int n = print_num(pct, i);
-        pct[n++] = '%'; pct[n] = 0;
-        printc(pct, VGA_GREEN);
-        set_cursor(0, cursor_y);
-        delay(200);
-    }
-    println("", 0);
-    println("  + Download complete!", VGA_GREEN);
-    copy_str(buf, "  Location: /boot/iso/");
-    copy_str(buf + 21, name);
-    copy_str(buf + 21 + str_len(name), ".iso");
-    println(buf, VGA_YELLOW);
-}
-
-static void cmd_install(const char *arg) {
-    if (!network_connected) { println("x No internet connection! Run 'netstat' to check.", VGA_RED); return; }
-    
-    int found = -1;
-    if (arg[0] >= '1' && arg[0] <= '9') {
-        int num = 0;
-        for (int k = 0; arg[k] >= '0' && arg[k] <= '9'; k++)
-            num = num * 10 + (arg[k] - '0');
-        if (num >= 1 && num <= 12) found = num - 1;
-    } else {
-        for (int i = 0; i < 12; i++)
-            if (str_contains(distro_names[i], arg)) { found = i; break; }
-    }
-    
-    if (found == -1) { println("x Distribution not found. Run 'list' to see available.", VGA_RED); return; }
-    
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    char msg[80];
-    copy_str(msg, "Installing ");
-    copy_str(msg + 11, distro_names[found]);
-    copy_str(msg + 11 + str_len(distro_names[found]), "...");
-    println(msg, VGA_YELLOW);
-    
-    println("", 0);
-    println("[1/5] Checking system requirements...", VGA_LIGHTCYAN);
-    delay(300);
-    println("  + CPU: x86_64", VGA_GREEN);
-    println("  + RAM: 2048MB", VGA_GREEN);
-    println("  + Disk: 20GB free", VGA_GREEN);
-    
-    println("", 0);
-    println("[2/5] Downloading ISO...", VGA_LIGHTCYAN);
-    fake_download(distro_names[found]);
-    
-    println("", 0);
-    println("[3/5] Verifying checksum...", VGA_LIGHTCYAN);
-    println("  + SHA256: a3f8d9e2...", VGA_GREEN);
-    
-    println("", 0);
-    println("[4/5] Extracting to partition...", VGA_LIGHTCYAN);
-    for (int i = 0; i <= 100; i += 20) {
-        printc("  Extracting: [", VGA_GREEN);
-        for (int j = 0; j < 50; j++)
-            printc((j < i / 2) ? "=" : " ", VGA_GREEN);
-        printc("] ", VGA_GREEN);
-        char pct[5]; int n = print_num(pct, i); pct[n++] = '%'; pct[n] = 0;
-        printc(pct, VGA_GREEN);
-        set_cursor(0, cursor_y);
-        delay(200);
-    }
-    println("", 0);
-    
-    println("", 0);
-    println("[5/5] Configuring bootloader...", VGA_LIGHTCYAN);
-    println("  + GRUB entry added", VGA_GREEN);
-    println("  + Initramfs generated", VGA_GREEN);
-    
-    println("", 0);
-    printc("+ ", VGA_GREEN); printc(distro_names[found], VGA_WHITE);
-    println(" installed successfully!", VGA_GREEN);
-    printc("  Type 'boot ", VGA_YELLOW); printc(distro_names[found], VGA_WHITE);
-    println("' to start it.", VGA_YELLOW);
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
-}
-
-static void cmd_boot(const char *arg) {
-    println("", 0);
-    println("==================================================================", VGA_CYAN);
-    printc("Booting ", VGA_YELLOW); println(arg, VGA_WHITE);
-    println("[    0.000000] Linux version 6.8.0-tfd", VGA_GREEN);
-    println("[    0.001234] Command line: BOOT_IMAGE=/boot/vmlinuz", VGA_GREEN);
-    delay(500);
-    for (int p = 0; p <= 100; p += 10) {
-        char buf[40];
-        copy_str(buf, "[    0.");
-        int n = str_len(buf);
-        n += print_num(buf + n, p * 10000);
-        copy_str(buf + n, "] Loading kernel modules... ");
-        printc(buf, VGA_GREEN);
-        set_cursor(0, cursor_y);
-        delay(150);
-    }
-    println("", 0);
-    println("[    0.100000] Starting systemd...", VGA_GREEN);
-    println("[    0.200000] Reached target graphical interface", VGA_GREEN);
-    println("", 0);
-    printc("+ Welcome to ", VGA_GREEN); printc(arg, VGA_WHITE); println("!", VGA_GREEN);
-    println("==================================================================", VGA_CYAN);
-    println("", 0);
-    println("", 0);
-    booted = 1;
-}
-
-/* ============ KEYBOARD ============ */
+/* ============ INPUT DEVICES ============ */
 static void ps2_wait_write(void) { while (inb(0x64) & 2) io_wait(); }
 static void ps2_wait_data(void) { while (!(inb(0x64) & 1)) io_wait(); }
+static uint8_t ps2_read(void) { ps2_wait_data(); return inb(0x60); }
+
+static void mouse_write(uint8_t d) {
+    ps2_wait_write(); outb(0x64, 0xD4);
+    ps2_wait_write(); outb(0x60, d);
+    ps2_read();
+}
+static void keyboard_write(uint8_t d) { ps2_wait_write(); outb(0x60, d); }
 
 static char scancode_to_ascii(uint8_t sc) {
     switch (sc) {
@@ -422,131 +550,284 @@ static char scancode_to_ascii(uint8_t sc) {
     }
 }
 
-static char read_key(void) {
-    ps2_wait_data();
-    uint8_t sc = inb(0x60);
-    return scancode_to_ascii(sc);
+/* ============ USB MOUSE SUPPORT via Legacy Emulation ============ */
+static void enable_usb_legacy(void) {
+    /* Some BIOSes translate USB mouse to PS/2 when legacy support is enabled.
+       Try to enable the auxiliary PS/2 port and send mouse init sequence. */
+    ps2_wait_write(); outb(0x64, 0xA8); /* Enable auxiliary device */
+    /* Send reset */
+    mouse_write(0xFF);
+    ps2_read(); /* ACK */
+    ps2_read(); /* AA (self-test OK) */
+    ps2_read(); /* Device ID (0x00 for standard mouse) */
+    /* Enable data reporting */
+    mouse_write(0xF4);
+    ps2_read(); /* ACK */
 }
 
-static void keyboard_write(uint8_t d) { ps2_wait_write(); outb(0x60, d); }
+/* ============ KEYBOARD NAVIGATION ============ */
+static int kb_nav_mode = 0; /* 0=mouse, 1=keyboard nav */
+static int kb_sel_icon = 0;
 
-/* ============ COMMAND PROCESSOR ============ */
-static void process_command(const char *cmd) {
-    if (cmd[0] == 0) return;
-    
-    if (history_count < HISTORY_MAX) copy_str(history[history_count++], cmd);
-    
-    char command[30] = "", arg[50] = "";
-    int i = 0, j = 0;
-    while (cmd[i] && cmd[i] != ' ' && j < 29) command[j++] = cmd[i++];
-    command[j] = 0;
-    if (cmd[i] == ' ') i++;
-    j = 0;
-    while (cmd[i] && j < 49) arg[j++] = cmd[i++];
-    arg[j] = 0;
-    
-    for (int k = 0; command[k]; k++)
-        if (command[k] >= 'A' && command[k] <= 'Z') command[k] += 32;
-    
-    if (str_cmp(command, "help") == 0 || str_cmp(command, "h") == 0 || str_cmp(command, "?") == 0)
-        cmd_help();
-    else if (str_cmp(command, "list") == 0 || str_cmp(command, "ls") == 0)
-        cmd_list();
-    else if (str_cmp(command, "install") == 0) {
-        if (arg[0]) cmd_install(arg);
-        else { println("Usage: install <distro_name_or_number>", VGA_YELLOW);
-               println("  Example: install arch", VGA_WHITE);
-               println("  Example: install 1", VGA_WHITE); }
-    } else if (str_cmp(command, "boot") == 0) {
-        if (arg[0]) cmd_boot(arg);
-        else { println("Usage: boot <distro_name>", VGA_YELLOW);
-               println("  Example: boot ubuntu", VGA_WHITE); }
-    } else if (str_cmp(command, "netstat") == 0 || str_cmp(command, "net") == 0)
-        cmd_netstat();
-    else if (str_cmp(command, "clear") == 0 || str_cmp(command, "cls") == 0)
-        print_banner();
-    else if (str_cmp(command, "about") == 0)
-        cmd_about();
-    else if (str_cmp(command, "reboot") == 0) {
-        println("System rebooting in 3 seconds...", VGA_YELLOW);
-        for (int t = 3; t > 0; t--) {
-            char buf[5]; buf[0] = ' '; print_num(buf + 1, t);
-            buf[2] = '.'; buf[3] = '.'; buf[4] = 0;
-            printc(buf, VGA_WHITE); set_cursor(0, cursor_y); delay(800);
+static void kb_handle_arrow(char key) {
+    static int kb_arrow_timer = 0;
+    if (key == 'U') { /* Up */
+        if (start_menu_open) {
+            kb_tab_select = (kb_tab_select - 1 + start_item_count) % start_item_count;
+        } else {
+            kb_sel_icon = (kb_sel_icon - 1 + icon_count) % icon_count;
+            mouse_x = icon_x[kb_sel_icon] + 16;
+            mouse_y = icon_y[kb_sel_icon] + 16;
         }
-        println("", 0); println("", 0);
-        println("=== BOOT MENU ===", VGA_CYAN);
-        println("1. Start TinyFoxyDOS", VGA_WHITE);
-        println("2. Boot existing OS", VGA_WHITE);
-        println("3. Network install", VGA_WHITE);
-        println("", 0); printc("Select option: ", VGA_WHITE);
-        booted = 0;
-    } else if (str_cmp(command, "shutdown") == 0 || str_cmp(command, "poweroff") == 0) {
-        println("System shutting down in 3 seconds...", VGA_RED);
-        for (int t = 3; t > 0; t--) {
-            char buf[5]; buf[0] = ' '; print_num(buf + 1, t);
-            buf[2] = '.'; buf[3] = '.'; buf[4] = 0;
-            printc(buf, VGA_WHITE); set_cursor(0, cursor_y); delay(800);
+    } else if (key == 'D') { /* Down */
+        if (start_menu_open) {
+            kb_tab_select = (kb_tab_select + 1) % start_item_count;
+        } else {
+            kb_sel_icon = (kb_sel_icon + 1) % icon_count;
+            mouse_x = icon_x[kb_sel_icon] + 16;
+            mouse_y = icon_y[kb_sel_icon] + 16;
         }
-        println("", 0); println("Power off.", VGA_GREEN);
-        while (1) __asm__ volatile("hlt");
-    } else if (str_cmp(command, "history") == 0)
-        cmd_history();
-    else if (str_cmp(command, "exit") == 0 || str_cmp(command, "quit") == 0) {
-        clear_screen();
-        println("=== BOOT MENU ===", VGA_CYAN);
-        println("1. Start TinyFoxyDOS", VGA_WHITE);
-        println("2. Boot existing OS", VGA_WHITE);
-        println("3. Network install", VGA_WHITE);
-        println("", 0); printc("Select option: ", VGA_WHITE);
-        booted = 0;
+    }
+    kb_nav_mode = 1;
+}
+
+static void kb_handle_enter(void) {
+    if (start_menu_open) {
+        if (kb_tab_select == 4) { /* Shut Down */
+            start_menu_open = 0;
+            show_error();
+        } else {
+            show_error();
+        }
+        start_menu_open = 0;
     } else {
-        printc("x Command not found: ", VGA_RED); println(command, VGA_RED);
-        println("  Type 'help' for available commands", VGA_WHITE);
+        /* Open icon based on selection */
+        if (kb_sel_icon == 0) show_error(); /* My PC */
+        else if (kb_sel_icon == 1) create_window(80, 40, 320, 220, "Notepad - Untitled");
+        else if (kb_sel_icon == 2) show_error(); /* Calc */
+    }
+}
+
+/* ============ REDRAW EVERYTHING ============ */
+static void redraw_all(void) {
+    draw_desktop();
+    for (int i = 0; i < icon_count; i++)
+        draw_desktop_icon(icon_x[i], icon_y[i], icon_labels[i]);
+    draw_taskbar();
+    if (start_menu_open) draw_start_menu();
+    for (int i = 0; i < window_count; i++) {
+        if (window_visible[i]) {
+            draw_window_frame(i);
+            if (str_cmp(window_title[i], "Notepad - Untitled") == 0)
+                draw_notepad_content(i);
+        }
+    }
+    if (error_active) {
+        /* Redraw error on top */
+        show_error();
     }
 }
 
 /* ============ MAIN ============ */
 void kernel_main(uint32_t magic, uint32_t addr) {
-    (void)magic; (void)addr;
-    
+    if (magic != 0x2BADB002) return;
+    uint32_t *mbi = (uint32_t *)addr;
+    uint32_t flags = *mbi;
+    fb = 0;
+
+    if ((flags & (1 << 11)) && *(mbi+22) != 0) {
+        fb = (uint8_t *)(uint32_t)*(mbi+22);
+        fb_pitch = *(mbi+24);
+        fb_width = *(mbi+25);
+        fb_height = *(mbi+26);
+        if (fb_width == 0 || fb_height == 0) fb = 0;
+    }
+
+    if (!fb) {
+        /* Fallback VGA 320x200 */
+        outb(0x3C2, 0x63); outb(0x3D4, 0x00); outb(0x3D5, 0x5F);
+        outb(0x3D4, 0x01); outb(0x3D5, 0x4F); outb(0x3D4, 0x02); outb(0x3D5, 0x50);
+        outb(0x3D4, 0x03); outb(0x3D5, 0x82); outb(0x3D4, 0x04); outb(0x3D5, 0x54);
+        outb(0x3D4, 0x05); outb(0x3D5, 0x80); outb(0x3D4, 0x06); outb(0x3D5, 0xBF);
+        outb(0x3D4, 0x07); outb(0x3D5, 0x00); outb(0x3D4, 0x08); outb(0x3D5, 0x00);
+        outb(0x3D4, 0x09); outb(0x3D5, 0x41); outb(0x3D4, 0x0A); outb(0x3D5, 0x00);
+        outb(0x3D4, 0x0B); outb(0x3D5, 0x00); outb(0x3D4, 0x0C); outb(0x3D5, 0x00);
+        outb(0x3D4, 0x0D); outb(0x3D5, 0x00); outb(0x3D4, 0x0E); outb(0x3D5, 0x00);
+        outb(0x3D4, 0x0F); outb(0x3D5, 0x00); outb(0x3D4, 0x10); outb(0x3D5, 0x9C);
+        outb(0x3D4, 0x11); outb(0x3D5, 0x8E); outb(0x3D4, 0x12); outb(0x3D5, 0x8F);
+        outb(0x3D4, 0x13); outb(0x3D5, 0x28); outb(0x3D4, 0x14); outb(0x3D5, 0x40);
+        outb(0x3D4, 0x15); outb(0x3D5, 0x96); outb(0x3D4, 0x16); outb(0x3D5, 0xB9);
+        outb(0x3D4, 0x17); outb(0x3D5, 0xA3); outb(0x3C4, 0x00); outb(0x3C5, 0x03);
+        outb(0x3C4, 0x01); outb(0x3C5, 0x01); outb(0x3C4, 0x02); outb(0x3C5, 0x0F);
+        outb(0x3C4, 0x03); outb(0x3C5, 0x00); outb(0x3C4, 0x04); outb(0x3C5, 0x0E);
+        outb(0x3CE, 0x00); outb(0x3CF, 0x00); outb(0x3CE, 0x01); outb(0x3CF, 0x00);
+        outb(0x3CE, 0x02); outb(0x3CF, 0x00); outb(0x3CE, 0x03); outb(0x3CF, 0x00);
+        outb(0x3CE, 0x04); outb(0x3CF, 0x00); outb(0x3CE, 0x05); outb(0x3CF, 0x40);
+        outb(0x3CE, 0x06); outb(0x3CF, 0x05); outb(0x3CE, 0x07); outb(0x3CF, 0x0F);
+        outb(0x3CE, 0x08); outb(0x3CF, 0xFF); inb(0x3DA);
+        outb(0x3C0, 0x30); outb(0x3C0, 0x41); outb(0x3C0, 0x33); outb(0x3C0, 0x00);
+        outb(0x3C0, 0x20);
+        fb = (uint8_t*)0xA0000;
+        fb_pitch = 320; fb_width = 320; fb_height = 200;
+        taskbar_h = 18;
+        icon_y[1] = 80; icon_y[2] = 140;
+    }
+
+    set_teal_palette();
+    mouse_x = fb_width / 2;
+    mouse_y = fb_height / 2;
+    cursor_save();
+
+    /* Init PS/2 mouse */
+    enable_usb_legacy();
+
     /* Init keyboard */
-    ps2_wait_write(); outb(0x64, 0xA8);
-    keyboard_write(0xF0); keyboard_write(0x01);
-    
-    hide_cursor(); clear_screen();
-    print_banner();
-    println("Network initialized. Ready to install Linux.", VGA_GREEN);
-    println("", 0);
-    
+    keyboard_write(0xF0);
+    keyboard_write(0x01);
+    mouse_cycle = 0;
+
+    redraw_all();
+    cursor_draw();
+
+    int tick = 0;
     while (1) {
-        print_prompt(); show_cursor();
-        
-        input_len = 0; input_buffer[0] = 0;
-        while (1) {
-            char c = read_key();
-            if (c == '\n') { printc("\n", VGA_WHITE); break; }
-            else if (c == '\b') {
-                if (input_len > 0) {
-                    input_len--; input_buffer[input_len] = 0;
-                    if (cursor_x > 0) {
-                        cursor_x--;
-                        putchar_at(cursor_x, cursor_y, ' ', VGA_LIGHTGRAY);
-                        set_cursor(cursor_x, cursor_y);
+        /* ==== POLL I/O ==== */
+        while (inb(0x64) & 1) {
+            uint8_t st = inb(0x64);
+            uint8_t d = inb(0x60);
+
+            if (st & 0x20) {
+                /* ==== MOUSE DATA ==== */
+                if (mouse_cycle == 0) {
+                    if (d & 0x08) { mouse_bytes[0] = d; mouse_cycle++; kb_nav_mode = 0; }
+                } else {
+                    mouse_bytes[mouse_cycle++] = d;
+                    if (mouse_cycle == 3) {
+                        mouse_cycle = 0;
+                        int dx = mouse_bytes[1], dy = mouse_bytes[2];
+                        if (mouse_bytes[0] & 0x10) dx |= ~0xFF;
+                        if (mouse_bytes[0] & 0x20) dy |= ~0xFF;
+                        dy = -dy;
+                        int btn = mouse_bytes[0] & 0x07;
+                        int was_click = mouse_buttons == 0 && btn != 0;
+                        mouse_buttons = btn;
+                        move_cursor(mouse_x + dx, mouse_y + dy);
+
+                        if (was_click && (btn & 1)) {
+                            /* ==== LEFT CLICK ==== */
+                            /* Check Start button */
+                            if (in_rect(mouse_x, mouse_y, 2, fb_height - taskbar_h + 2, 56, 20)) {
+                                start_menu_open = !start_menu_open;
+                                kb_tab_select = 0;
+                            }
+                            /* Check taskbar clock for shutdown */
+                            if (in_rect(mouse_x, mouse_y, fb_width - 56, fb_height - taskbar_h + 2, 52, 20)) {
+                                show_error();
+                            }
+                            /* Check desktop icons */
+                            for (int i = 0; i < icon_count; i++) {
+                                if (in_rect(mouse_x, mouse_y, icon_x[i], icon_y[i], 32, 40)) {
+                                    if (i == 0) show_error();
+                                    else if (i == 1) {
+                                        int nw = create_window(80, 40, 320, 220, "Notepad - Untitled");
+                                        draw_window_frame(nw);
+                                        draw_notepad_content(nw);
+                                    }
+                                    else if (i == 2) show_error();
+                                    start_menu_open = 0;
+                                }
+                            }
+                            /* Check window close buttons */
+                            for (int i = 0; i < window_count; i++) {
+                                if (!window_visible[i]) continue;
+                                int wx = window_x[i], wy = window_y[i], ww = window_w[i];
+                                if (in_rect(mouse_x, mouse_y, wx + ww - 18, wy, 16, 16)) {
+                                    close_window(i);
+                                }
+                            }
+                            /* Check error OK button */
+                            if (error_active && in_rect(mouse_x, mouse_y, error_x + error_w/2 - 20, error_y + 42, 40, 14)) {
+                                hide_error();
+                            }
+                            /* Check start menu items */
+                            if (start_menu_open) {
+                                for (int i = 0; i < start_item_count; i++) {
+                                    int iy = start_menu_y + 2 + i * 24;
+                                    if (in_rect(mouse_x, mouse_y, start_menu_x + 2, iy, 156, 22)) {
+                                        if (i == 4) { start_menu_open = 0; show_error(); }
+                                        else { show_error(); start_menu_open = 0; }
+                                    }
+                                }
+                            }
+                            /* Check window drag (title bar) */
+                            dragging = -1;
+                            for (int i = window_count - 1; i >= 0; i--) {
+                                if (!window_visible[i]) continue;
+                                int wx = window_x[i], wy = window_y[i], ww = window_w[i];
+                                if (in_rect(mouse_x, mouse_y, wx, wy, ww, 18)) {
+                                    window_active = i;
+                                    dragging = i;
+                                    drag_off_x = mouse_x - wx;
+                                    drag_off_y = mouse_y - wy;
+                                    break;
+                                }
+                            }
+                        }
+                        /* ==== DRAG ==== */
+                        if ((btn & 1) && dragging >= 0) {
+                            window_x[dragging] = mouse_x - drag_off_x;
+                            window_y[dragging] = mouse_y - drag_off_y;
+                        }
+                        if (!(btn & 1)) dragging = -1;
                     }
                 }
-            } else if (c >= 32 && c <= 126 && input_len < 255) {
-                input_buffer[input_len++] = c; input_buffer[input_len] = 0;
-                printc((char[]){c, 0}, VGA_WHITE);
+            } else {
+                /* ==== KEYBOARD DATA ==== */
+                char c = scancode_to_ascii(d);
+                if (c == '\b') {
+                    if (notepad_len > 0) { notepad_len--; }
+                } else if (c == '\n') {
+                    if (notepad_len < 3199) { notepad_text[notepad_len++] = '\n'; }
+                } else if (c >= 32 && c <= 126) {
+                    if (notepad_len < 3199) { notepad_text[notepad_len++] = c; }
+                }
+
+                /* Keyboard shortcuts */
+                if (d == 0x48) kb_handle_arrow('U'); /* Up */
+                if (d == 0x50) kb_handle_arrow('D'); /* Down */
+                if (d == 0x1C) kb_handle_enter();     /* Enter */
+                if (d == 0x01) { start_menu_open = 0; } /* Esc */
+                if (d == 0x3B) { /* F1 = Start menu */
+                    start_menu_open = !start_menu_open;
+                    kb_tab_select = 0;
+                }
             }
         }
-        hide_cursor();
-        process_command(input_buffer);
-        
-        if (booted) {
-            printc(username, VGA_GREEN); printc("@", VGA_LIGHTGRAY);
-            printc(hostname, VGA_LIGHTCYAN); printc(":~$ ", VGA_WHITE);
-            booted = 0;
+
+        /* ==== REDRAW ==== */
+        cursor_restore();
+        redraw_all();
+        cursor_save();
+        cursor_draw();
+
+        /* ==== RANDOM ERRORS ==== */
+        tick++;
+        if (!error_active && (tick % (4000000 + rand() % 3000000)) == 0) {
+            cursor_restore();
+            show_error();
+            cursor_save();
+            cursor_draw();
         }
+        if (error_active) {
+            error_timer--;
+            if (error_timer <= 0) {
+                cursor_restore();
+                hide_error();
+                cursor_save();
+                cursor_draw();
+            }
+        }
+
+        for (volatile int dly = 0; dly < 500; dly++);
     }
 }
