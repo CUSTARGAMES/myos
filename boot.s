@@ -1,8 +1,13 @@
 section .multiboot
 align 4
-dd 0x1BADB002
-dd (1 << 0) | (1 << 1) | (1 << 2)
-dd -(0x1BADB002 + ((1 << 0) | (1 << 1) | (1 << 2)))
+
+MAGIC    equ 0x1BADB002
+FLAGS    equ (1 << 0) | (1 << 1) | (1 << 2)
+CHECKSUM equ -(MAGIC + FLAGS)
+
+dd MAGIC
+dd FLAGS
+dd CHECKSUM
 dd 0
 dd 0
 dd 0
