@@ -11,14 +11,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dependencies
         run: sudo apt update && sudo apt install -y nasm xorriso grub-pc-bin gcc-multilib mtools
-      - name: Compile Bootloader
-        run: nasm -f elf32 boot.s -o boot.o
-      - name: Compile C Files
+      - name: Compile
         run: |
+          nasm -f elf32 boot.s -o boot.o
           gcc -m32 -ffreestanding -nostdlib -w -O0 -c kernel.c -o kernel.o
-          gcc -m32 -ffreestanding -nostdlib -w -O0 -c gui.c -o gui.o
       - name: Link
-        run: ld -m elf_i386 -T linker.ld -o kernel.bin boot.o kernel.o gui.o
+        run: ld -m elf_i386 -T linker.ld -o kernel.bin boot.o kernel.o
       - name: Build ISO
         run: |
           mkdir -p iso/boot/grub
