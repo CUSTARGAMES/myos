@@ -11,10 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Dependencies
         run: sudo apt update && sudo apt install -y nasm xorriso grub-pc-bin gcc-multilib mtools
-      - name: Compile
-        run: |
-          nasm -f elf32 boot.s -o boot.o
-          gcc -m32 -ffreestanding -nostdlib -w -O0 -c kernel.c -o kernel.o
+      - name: Compile Bootloader
+        run: nasm -f elf32 boot.s -o boot.o
+      - name: Compile Kernel
+        run: gcc -m32 -ffreestanding -nostdlib -nostartfiles -nodefaultlibs -w -O0 -c kernel.c -o kernel.o
       - name: Link
         run: ld -m elf_i386 -T linker.ld -o kernel.bin boot.o kernel.o
       - name: Build ISO
@@ -26,5 +26,5 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: TinyFoxyDOS-ISO
+          name: TFD-OS
           path: os.iso
