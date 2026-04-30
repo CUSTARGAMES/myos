@@ -13,22 +13,19 @@ jobs:
         run: sudo apt update && sudo apt install -y nasm xorriso grub-pc-bin gcc-multilib mtools
       - name: Compile Bootloader
         run: nasm -f elf32 boot.s -o boot.o
-      - name: Compile All C Files
+      - name: Compile C Files
         run: |
           gcc -m32 -ffreestanding -nostdlib -w -O0 -c kernel.c -o kernel.o
-          gcc -m32 -ffreestanding -nostdlib -w -O0 -c gfx.c -o gfx.o
-          gcc -m32 -ffreestanding -nostdlib -w -O0 -c mouse.c -o mouse.o
-          gcc -m32 -ffreestanding -nostdlib -w -O0 -c keyboard.c -o keyboard.o
           gcc -m32 -ffreestanding -nostdlib -w -O0 -c gui.c -o gui.o
-      - name: Link All Object Files
-        run: ld -m elf_i386 -T linker.ld -o kernel.bin boot.o kernel.o gfx.o mouse.o keyboard.o gui.o
+      - name: Link
+        run: ld -m elf_i386 -T linker.ld -o kernel.bin boot.o kernel.o gui.o
       - name: Build ISO
         run: |
           mkdir -p iso/boot/grub
           cp kernel.bin iso/boot/
           cp grub.cfg iso/boot/grub/
           grub-mkrescue -o os.iso iso
-      - name: Upload ISO
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: TinyFoxyDOS-ISO
