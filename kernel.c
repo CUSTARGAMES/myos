@@ -40,11 +40,11 @@ static int hist_count = 0;
 static char notepad_text[20][80];
 static int notepad_row = 0, notepad_col = 0;
 static int notepad_open = 0;
-static int app_mode = 0; /* 0=cmd, 1=notepad, 2=games, 3=snake, 4=tetris, 5=pong */
+static int app_mode = 0;
 static int game_selected = 0;
 
-/* Snake */
-static int sx[200], sy[200], slen = 3, sdir = 0, sfx, sfy, sscore = 0, sgameover = 0;
+/* Snake - renamed sn_len to avoid conflict */
+static int sx[200], sy[200], sn_len = 3, sdir = 0, sfx, sfy, sscore = 0, sgameover = 0;
 /* Tetris */
 static int board[20][10];
 static int tpiece[4][2], tpiecetype = 0, tx = 4, ty = 0, tscore = 0;
@@ -55,6 +55,16 @@ static const int pieces[7][4][2] = {
 };
 /* Pong */
 static int p1y = 10, p2y = 10, bpx = 40, bpy = 12, bdx = 1, bdy = 1, p1score = 0, p2score = 0;
+
+/* ============ STRING FUNCTIONS ============ */
+static int str_len(const char *s) { int n=0; while(s[n]) n++; return n; }
+static int str_cmp(const char *a, const char *b) { while(*a&&*b&&*a==*b){a++;b++;} return *a-*b; }
+static void str_cpy(char *d, const char *s) { while(*s) *d++=*s++; *d=0; }
+static int str_has(const char *h, const char *n) {
+    int nl=str_len(n); if(nl==0) return 1;
+    while(*h){int m=1;for(int i=0;i<nl;i++)if(h[i]!=n[i]){m=0;break;}if(m)return 1;h++;}
+    return 0;
+}
 
 /* ============ SCREEN ============ */
 static void set_cursor(int x, int y) {
@@ -87,16 +97,6 @@ static void putc_at(int x, int y, char c, uint8_t col) {
 }
 static void print_at(int x, int y, const char *s, uint8_t col) { while(*s) putc_at(x++,y,*s++,col); }
 
-/* ============ STRINGS ============ */
-static int slen(const char *s) { int n=0; while(s[n]) n++; return n; }
-static int scmp(const char *a, const char *b) { while(*a&&*b&&*a==*b){a++;b++;} return *a-*b; }
-static void scpy(char *d, const char *s) { while(*s) *d++=*s++; *d=0; }
-static int contains(const char *h, const char *n) {
-    int nl=slen(n); if(nl==0) return 1;
-    while(*h){int m=1;for(int i=0;i<nl;i++)if(h[i]!=n[i]){m=0;break;}if(m)return 1;h++;}
-    return 0;
-}
-
 /* ============ KEYBOARD ============ */
 static void ps2_wait_write(void) { while(inb(0x64)&2) io_wait(); }
 static void ps2_wait_data(void) { while(!(inb(0x64)&1)) io_wait(); }
@@ -127,15 +127,15 @@ static void boot_menu(void) {
     clear_screen();
     print_at(25,2,"╔══════════════════════════════╗",CYAN);
     print_at(25,3,"║                              ║",CYAN);
-    print_at(25,4,"║   ████████╗███████╗██████╗   ║",CYAN);
-    print_at(25,5,"║   ╚══██╔══╝██╔════╝██╔══██╗  ║",CYAN);
-    print_at(25,6,"║      ██║   █████╗  ██║  ██║  ║",CYAN);
-    print_at(25,7,"║      ██║   ██╔══╝  ██║  ██║  ║",CYAN);
-    print_at(25,8,"║      ██║   ██║     ██████╔╝  ║",CYAN);
-    print_at(25,9,"║      ╚═╝   ╚═╝     ╚═════╝   ║",CYAN);
+    print_at(25,4,"║   ████████╗███████╗██████╗   ║",RED);
+    print_at(25,5,"║   ╚══██╔══╝██╔════╝██╔══██╗  ║",RED);
+    print_at(25,6,"║      ██║   █████╗  ██║  ██║  ║",GREEN);
+    print_at(25,7,"║      ██║   ██╔══╝  ██║  ██║  ║",GREEN);
+    print_at(25,8,"║      ██║   ██║     ██████╔╝  ║",BLUE);
+    print_at(25,9,"║      ╚═╝   ╚═╝     ╚═════╝   ║",BLUE);
     print_at(25,10,"║                              ║",CYAN);
     print_at(25,11,"║     TFD~by sadman            ║",CYAN);
-    print_at(25,12,"║     Version 2.0              ║",CYAN);
+    print_at(25,12,"║     Version beta             ║",CYAN);
     print_at(25,13,"║                              ║",CYAN);
     print_at(25,14,"╚══════════════════════════════╝",CYAN);
     print_at(28,16,"[ PRESS ENTER TO BOOT ]",YELLOW);
@@ -156,15 +156,13 @@ static void setup_wizard(void) {
     while(1){char c=read_key();if(c=='\n'){pcname[i]=0;break;}else if(c=='\b'&&i>0){i--;putc('\b');}else if(c>=32&&i<19){pcname[i++]=c;putc(c);}}
     println("",0); println("",0);
     print("Setup complete! Welcome, ",GREEN); println(username,WHITE);
-    println("",0);
-    for(volatile int d=0;d<500000;d++);
+    for(volatile int d=0;d<300000;d++);
     hide_cursor();
 }
 
 /* ============ APPS ============ */
 static void app_notepad(void) {
-    notepad_open=1; app_mode=1;
-    notepad_row=0;notepad_col=0;
+    app_mode=1; notepad_row=0;notepad_col=0;
     for(int i=0;i<20;i++) for(int j=0;j<80;j++) notepad_text[i][j]=' ';
     clear_screen();
     println("=== FXC NOTEPAD ===",CYAN);
@@ -174,7 +172,7 @@ static void app_notepad(void) {
 }
 
 static void app_games_menu(void) {
-    app_mode=2; game_selected=0;
+    app_mode=2;
     clear_screen();
     println("=== FXC GAMES ===",CYAN);
     println("",0);
@@ -187,7 +185,7 @@ static void app_games_menu(void) {
 
 static void app_snake_init(void) {
     app_mode=3;
-    slen=3; sdir=0; sscore=0; sgameover=0;
+    sn_len=3; sdir=0; sscore=0; sgameover=0;
     sx[0]=40;sy[0]=12; sx[1]=38;sy[1]=12; sx[2]=36;sy[2]=12;
     sfx=50; sfy=12;
     clear_screen();
@@ -195,30 +193,25 @@ static void app_snake_init(void) {
     for(int y=0;y<ROWS;y++){putc_at(0,y,'#',GREEN);putc_at(COLS-1,y,'#',GREEN);}
     print_at(2,0," SNAKE | Score: 0 | WASD=Move | Q=Quit ",WHITE);
     putc_at(sfx,sfy,'.',RED);
-    putc_at(sx[0],sy[0],'>',YELLOW);
-    putc_at(sx[1],sy[1],'>',YELLOW);
-    putc_at(sx[2],sy[2],'>',YELLOW);
-    putc_at(sx[0]+1,sy[0],'>',YELLOW);
-    putc_at(sx[1]+1,sy[1],'>',YELLOW);
-    putc_at(sx[2]+1,sy[2],'>',YELLOW);
+    for(int i=0;i<sn_len;i++){putc_at(sx[i],sy[i],'>',YELLOW);putc_at(sx[i]+1,sy[i],'>',YELLOW);}
 }
 
 static void snake_update(void) {
     int nx=sx[0],ny=sy[0];
     if(sdir==0)nx+=2; else if(sdir==1)ny++; else if(sdir==2)nx-=2; else ny--;
     if(nx<=0||nx>=COLS-2||ny<=0||ny>=ROWS-1){sgameover=1;return;}
-    for(int i=0;i<slen;i++) if(sx[i]==nx&&sy[i]==ny){sgameover=1;return;}
-    putc_at(sx[slen-1],sy[slen-1],' ',BLACK);
-    putc_at(sx[slen-1]+1,sy[slen-1],' ',BLACK);
-    for(int i=slen-1;i>0;i--){sx[i]=sx[i-1];sy[i]=sy[i-1];}
+    for(int i=0;i<sn_len;i++) if(sx[i]==nx&&sy[i]==ny){sgameover=1;return;}
+    putc_at(sx[sn_len-1],sy[sn_len-1],' ',BLACK);
+    putc_at(sx[sn_len-1]+1,sy[sn_len-1],' ',BLACK);
+    for(int i=sn_len-1;i>0;i--){sx[i]=sx[i-1];sy[i]=sy[i-1];}
     sx[0]=nx;sy[0]=ny;
     putc_at(sx[0],sy[0],'>',YELLOW);
     putc_at(sx[0]+1,sy[0],'>',YELLOW);
     if(sx[0]==sfx&&sy[0]==sfy || sx[0]+1==sfx&&sy[0]==sfy){
-        slen++; sscore+=10;
-        sx[slen-1]=sx[slen-2]; sy[slen-1]=sy[slen-2];
-        putc_at(sx[slen-1],sy[slen-1],'>',YELLOW);
-        putc_at(sx[slen-1]+1,sy[slen-1],'>',YELLOW);
+        sn_len++; sscore+=10;
+        sx[sn_len-1]=sx[sn_len-2]; sy[sn_len-1]=sy[sn_len-2];
+        putc_at(sx[sn_len-1],sy[sn_len-1],'>',YELLOW);
+        putc_at(sx[sn_len-1]+1,sy[sn_len-1],'>',YELLOW);
         sfx=((inb(0x40)*123+456)%35)*2+5;
         sfy=((inb(0x40)*789+123)%20)+3;
         putc_at(sfx,sfy,'.',RED);
@@ -234,22 +227,22 @@ static void app_tetris_init(void) {
     tpiecetype=inb(0x40)%7;
     for(int i=0;i<4;i++){tpiece[i][0]=pieces[tpiecetype][i][0];tpiece[i][1]=pieces[tpiecetype][i][1];}
     clear_screen();
-    for(int x=0;x<12;x++){putc_at(x*2+20,0,'#',GREEN);putc_at(x*2+20,21,'#',GREEN);}
     for(int y=0;y<22;y++){putc_at(20,y,'#',GREEN);putc_at(43,y,'#',GREEN);}
+    for(int x=0;x<12;x++){putc_at(x*2+20,0,'#',GREEN);putc_at(x*2+20,21,'#',GREEN);}
     print_at(2,0,"TETRIS | Score: 0 | AD=Move S=Down W=Rotate Q=Quit",WHITE);
 }
 
-static void tetris_draw_piece(int clear) {
+static void tetris_draw(int clr) {
     for(int i=0;i<4;i++){
         int px=20+(tx+tpiece[i][0])*2, py=ty+tpiece[i][1]+1;
         if(py>0){
-            if(clear){putc_at(px,py,' ',BLACK);putc_at(px+1,py,' ',BLACK);}
+            if(clr){putc_at(px,py,' ',BLACK);putc_at(px+1,py,' ',BLACK);}
             else{putc_at(px,py,'|',LCYAN);putc_at(px+1,py,'|',LCYAN);}
         }
     }
 }
 
-static int tetris_collision(int nx, int ny, int *p) {
+static int tetris_hit(int nx, int ny, int *p) {
     for(int i=0;i<4;i++){
         int x=nx+p[i*2], y=ny+p[i*2+1];
         if(x<0||x>=10||y>=20) return 1;
@@ -259,39 +252,33 @@ static int tetris_collision(int nx, int ny, int *p) {
 }
 
 static void tetris_update(void) {
-    tetris_draw_piece(1);
-    int flat[8]; for(int i=0;i<4;i++){flat[i*2]=tpiece[i][0];flat[i*2+1]=tpiece[i][1];}
-    if(!tetris_collision(tx,ty+1,flat)){ty++;}
+    tetris_draw(1);
+    int f[8]; for(int i=0;i<4;i++){f[i*2]=tpiece[i][0];f[i*2+1]=tpiece[i][1];}
+    if(!tetris_hit(tx,ty+1,f)){ty++;}
     else {
-        for(int i=0;i<4;i++){
-            int bx=tx+tpiece[i][0], by=ty+tpiece[i][1];
-            if(by>=0&&by<20&&bx>=0&&bx<10) board[by][bx]=1;
-        }
-        /* Check lines */
+        for(int i=0;i<4;i++){int bx=tx+tpiece[i][0],by=ty+tpiece[i][1];if(by>=0&&by<20&&bx>=0&&bx<10)board[by][bx]=1;}
         for(int y=19;y>=0;y--){
             int full=1;
-            for(int x=0;x<10;x++) if(!board[y][x]){full=0;break;}
+            for(int x=0;x<10;x++)if(!board[y][x]){full=0;break;}
             if(full){
                 tscore+=100;
-                for(int yy=y;yy>0;yy--) for(int x=0;x<10;x++) board[yy][x]=board[yy-1][x];
-                for(int x=0;x<10;x++) board[0][x]=0;
+                for(int yy=y;yy>0;yy--)for(int x=0;x<10;x++)board[yy][x]=board[yy-1][x];
+                for(int x=0;x<10;x++)board[0][x]=0;
                 y++;
             }
         }
-        /* Redraw board */
-        for(int y=0;y<20;y++) for(int x=0;x<10;x++){
+        for(int y=0;y<20;y++)for(int x=0;x<10;x++){
             if(board[y][x]){putc_at(20+x*2,y+1,'|',WHITE);putc_at(21+x*2,y+1,'|',WHITE);}
             else{putc_at(20+x*2,y+1,' ',BLACK);putc_at(21+x*2,y+1,' ',BLACK);}
         }
-        /* New piece */
-        tx=4;ty=0; tpiecetype=inb(0x40)%7;
+        tx=4;ty=0;tpiecetype=inb(0x40)%7;
         for(int i=0;i<4;i++){tpiece[i][0]=pieces[tpiecetype][i][0];tpiece[i][1]=pieces[tpiecetype][i][1];}
-        if(tetris_collision(tx,ty,flat)){app_mode=8;return;} /* Game over */
+        if(tetris_hit(tx,ty,f)){app_mode=8;return;}
         char buf[10];int sc=tscore,idx=9;buf[9]=0;
-        if(sc==0){buf[8]='0';}else while(sc){buf[--idx]='0'+sc%10;sc/=10;}
+        if(sc==0)buf[8]='0';else while(sc){buf[--idx]='0'+sc%10;sc/=10;}
         print_at(16,0,buf+idx,YELLOW);
     }
-    tetris_draw_piece(0);
+    tetris_draw(0);
 }
 
 static void app_pong_init(void) {
@@ -305,67 +292,46 @@ static void app_pong_init(void) {
 }
 
 static void pong_update(void) {
-    /* Clear ball */
     putc_at(bpx,bpy,' ',BLACK);
-    /* Move ball */
     bpx+=bdx; bpy+=bdy;
-    /* Wall collision */
-    if(bpy<=1){bdy=1;} if(bpy>=ROWS-2){bdy=-1;}
-    /* Paddle 1 */
-    if(bpx<=4&&bpy>=p1y-2&&bpy<=p1y+2){bdx=1;}
-    /* Paddle 2 */
-    if(bpx>=74&&bpy>=p2y-2&&bpy<=p2y+2){bdx=-1;}
-    /* Score */
-    if(bpx<=0){p2score++; bpx=40;bpy=12;bdx=1; char buf[5];int s=p2score,i=4;buf[4]=0;if(s==0)buf[3]='0';else while(s){buf[--i]='0'+s%10;s/=10;}print_at(48,0,buf+i,LBLUE);}
-    if(bpx>=79){p1score++; bpx=40;bpy=12;bdx=-1; char buf[5];int s=p1score,i=4;buf[4]=0;if(s==0)buf[3]='0';else while(s){buf[--i]='0'+s%10;s/=10;}print_at(30,0,buf+i,LRED);}
-    /* Draw ball */
+    if(bpy<=1)bdy=1; if(bpy>=ROWS-2)bdy=-1;
+    if(bpx<=4&&bpy>=p1y-2&&bpy<=p1y+2)bdx=1;
+    if(bpx>=74&&bpy>=p2y-2&&bpy<=p2y+2)bdx=-1;
+    if(bpx<=0){p2score++;bpx=40;bpy=12;bdx=1;char buf[5];int s=p2score,i=4;buf[4]=0;while(s||i==4){buf[--i]='0'+s%10;s/=10;}print_at(48,0,buf+i,LBLUE);}
+    if(bpx>=79){p1score++;bpx=40;bpy=12;bdx=-1;char buf[5];int s=p1score,i=4;buf[4]=0;while(s||i==4){buf[--i]='0'+s%10;s/=10;}print_at(30,0,buf+i,LRED);}
     putc_at(bpx,bpy,'o',WHITE);
-    /* Redraw paddles (clear old) */
     for(int i=-3;i<=3;i++){putc_at(2,p1y+i,' ',BLACK);putc_at(77,p2y+i,' ',BLACK);}
     for(int i=-2;i<=2;i++){putc_at(2,p1y+i,'|',LRED);putc_at(77,p2y+i,'|',LBLUE);}
 }
 
-/* ============ COMMAND PROCESSOR ============ */
+/* ============ COMMANDS ============ */
 static void process_command(const char *c) {
     if(c[0]==0)return;
-    if(hist_count<10)scpy(history[hist_count++],c);
-    if(scmp(c,"help")==0){
+    if(hist_count<10)str_cpy(history[hist_count++],c);
+    if(str_cmp(c,"help")==0){
         println("",0);
         println("══════ COMMANDS ══════",CYAN);
-        println("FXC NOTEPAD  - Open text editor",WHITE);
+        println("FXC NOTEPAD  - Text editor",WHITE);
         println("FXC GAMES    - Play games",GREEN);
-        println("help         - Show this",WHITE);
-        println("clear        - Clear screen",WHITE);
-        println("about        - About TFD",WHITE);
-        println("history      - Command history",WHITE);
-        println("shutdown     - Power off",RED);
+        println("help         - Commands",WHITE);
+        println("clear        - Clear",WHITE);
+        println("about        - Info",WHITE);
+        println("history      - History",WHITE);
+        println("shutdown     - Off",RED);
         println("══════════════════════",CYAN);
-    }else if(scmp(c,"clear")==0){
-        clear_screen();
-        print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);
-    }else if(contains(c,"FXC NOTEPAD")||contains(c,"fxc notepad")){
+    }else if(str_cmp(c,"clear")==0){
+        clear_screen(); print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);
+    }else if(str_has(c,"FXC NOTEPAD")||str_has(c,"fxc notepad")){
         app_notepad();
-    }else if(contains(c,"FXC GAMES")||contains(c,"fxc games")){
+    }else if(str_has(c,"FXC GAMES")||str_has(c,"fxc games")){
         app_games_menu();
-    }else if(scmp(c,"about")==0){
-        println("",0);
-        println("══════ ABOUT ══════",CYAN);
-        println("TFD OS v2.0",WHITE);
-        println("by Sadman",YELLOW);
-        println("Text-based OS with games",GREEN);
-        println("Snake | Tetris | Pong",MAGENTA);
-        println("══════════════════",CYAN);
-    }else if(scmp(c,"history")==0){
-        for(int i=0;i<hist_count;i++){char buf[5];buf[0]=' ';if(i<9){buf[1]='1'+i;}else{buf[0]='1';buf[1]='0'+i-9;}buf[2]=' ';buf[3]=0;print(buf,WHITE);println(history[i],LGRAY);}
-    }else if(scmp(c,"shutdown")==0){
-        println("Shutting down...",RED);
-        for(int t=3;t>0;t--){char buf[5];buf[0]=' ';buf[1]='0'+t;buf[2]='.';buf[3]='.';buf[4]=0;print(buf,WHITE);set_cursor(cx,cy);for(volatile int d=0;d<300000;d++);}
-        println("",0);println("Power off.",GREEN);
-        while(1)__asm__ volatile("hlt");
-    }else{
-        print("Unknown: ",RED);println(c,RED);
-        println("Type 'help' for commands",YELLOW);
-    }
+    }else if(str_cmp(c,"about")==0){
+        println("",0);println("══ ABOUT ══",CYAN);println("TFD OS v2.0",WHITE);println("by Sadman",YELLOW);println("Snake|Tetris|Pong",GREEN);println("═══════════",CYAN);
+    }else if(str_cmp(c,"history")==0){
+        for(int i=0;i<hist_count;i++){char b[5];b[0]=' ';if(i<9)b[1]='1'+i;else{b[0]='1';b[1]='0'+i-9;}b[2]=' ';b[3]=0;print(b,WHITE);println(history[i],LGRAY);}
+    }else if(str_cmp(c,"shutdown")==0){
+        println("Shutdown...",RED);for(int t=3;t>0;t--){putc('0'+t);putc('.');putc('.');for(volatile int d=0;d<300000;d++);}println("",0);println("Off.",GREEN);while(1)__asm__ volatile("hlt");
+    }else{print("?: ",RED);println(c,RED);}
     println("",0);
 }
 
@@ -380,9 +346,9 @@ void kernel_main(uint32_t magic, uint32_t addr) {
     setup_wizard();
     clear_screen();
     print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);
-    println("Type 'help' for commands | 'FXC GAMES' to play!",YELLOW);
-    println("",0);
-    cmd_len=0;
+    println("Type 'help' | 'FXC GAMES' to play!",YELLOW);
+    println("",0); cmd_len=0;
+
     while(1){
         if(app_mode==0){
             print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);print("/type~",CYAN);print("):$ ",GREEN);
@@ -394,46 +360,39 @@ void kernel_main(uint32_t magic, uint32_t addr) {
             if(app_mode==0){
                 if(c=='\n'){putc('\n');break;}
                 else if(c=='\b'){if(cmd_len>0){cmd_len--;putc('\b');}}
-                else if(c>=32&&c<=126&&cmd_len<255){cmd[cmd_len++]=c;cmd[cmd_len]=0;putc(c);}
-            }else if(app_mode==1){ /* Notepad */
+                else if(c>=32&&c<=126&&cmd_len<255){cmd[cmd_len++]=c;putc(c);}
+            }else if(app_mode==1){
                 if(c==0x01){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);break;}
                 else if(c=='\n'){notepad_row++;notepad_col=0;if(notepad_row>=20)notepad_row=0;putc('\n');}
                 else if(c=='\b'){if(notepad_col>0){notepad_col--;notepad_text[notepad_row][notepad_col]=' ';putc('\b');}}
                 else if(c>=32&&c<=126){if(notepad_col<79){notepad_text[notepad_row][notepad_col++]=c;putc(c);}}
-            }else if(app_mode==2){ /* Games menu */
+            }else if(app_mode==2){
                 if(c=='1'){app_snake_init();break;}
                 else if(c=='2'){app_tetris_init();break;}
                 else if(c=='3'){app_pong_init();break;}
                 else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);break;}
-            }else if(app_mode==3){ /* Snake playing */
+            }else if(app_mode==3){
                 if(c=='w'||c=='W')sdir=3;else if(c=='s'||c=='S')sdir=1;
                 else if(c=='a'||c=='A')sdir=2;else if(c=='d'||c=='D')sdir=0;
-                else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);println("Snake score: ",YELLOW);char buf[5];int sc=sscore;if(sc==0)putc('0');else{char t[5];int i=4;t[4]=0;while(sc){t[--i]='0'+sc%10;sc/=10;}print(t+i,WHITE);}println("",0);break;}
+                else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);print("Snake: ",YELLOW);char b[5];int sc=sscore,i=4;b[4]=0;while(sc||i==4){b[--i]='0'+sc%10;sc/=10;}println(b+i,WHITE);break;}
                 if(!sgameover){snake_update();if(sgameover){print_at(30,12,"GAME OVER!",RED);print_at(28,13,"Press Q to quit",WHITE);}}
                 for(volatile int d=0;d<150000;d++);
-            }else if(app_mode==4){ /* Tetris playing */
-                if(c=='a'||c=='A'){tetris_draw_piece(1);int flat[8];for(int i=0;i<4;i++){flat[i*2]=tpiece[i][0];flat[i*2+1]=tpiece[i][1];}if(!tetris_collision(tx-1,ty,flat))tx--;tetris_draw_piece(0);}
-                else if(c=='d'||c=='D'){tetris_draw_piece(1);int flat[8];for(int i=0;i<4;i++){flat[i*2]=tpiece[i][0];flat[i*2+1]=tpiece[i][1];}if(!tetris_collision(tx+1,ty,flat))tx++;tetris_draw_piece(0);}
-                else if(c=='s'||c=='S'){tetris_update();}
-                else if(c=='w'||c=='W'){tetris_draw_piece(1);int newp[4][2];for(int i=0;i<4;i++){newp[i][0]=-tpiece[i][1];newp[i][1]=tpiece[i][0];}int flat[8];for(int i=0;i<4;i++){flat[i*2]=newp[i][0];flat[i*2+1]=newp[i][1];}if(!tetris_collision(tx,ty,flat)){for(int i=0;i<4;i++){tpiece[i][0]=newp[i][0];tpiece[i][1]=newp[i][1];}}tetris_draw_piece(0);}
-                else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);println("Tetris score: ",YELLOW);char buf[5];int sc=tscore;if(sc==0)putc('0');else{char t[5];int i=4;t[4]=0;while(sc){t[--i]='0'+sc%10;sc/=10;}print(t+i,WHITE);}println("",0);break;}
-                else if(app_mode==8){print_at(30,12,"GAME OVER!",RED);print_at(28,13,"Press Q to quit",WHITE);app_mode=4;}
+            }else if(app_mode==4){
+                if(c=='a'||c=='A'){tetris_draw(1);int f[8];for(int i=0;i<4;i++){f[i*2]=tpiece[i][0];f[i*2+1]=tpiece[i][1];}if(!tetris_hit(tx-1,ty,f))tx--;tetris_draw(0);}
+                else if(c=='d'||c=='D'){tetris_draw(1);int f[8];for(int i=0;i<4;i++){f[i*2]=tpiece[i][0];f[i*2+1]=tpiece[i][1];}if(!tetris_hit(tx+1,ty,f))tx++;tetris_draw(0);}
+                else if(c=='s'||c=='S')tetris_update();
+                else if(c=='w'||c=='W'){tetris_draw(1);int np[4][2];for(int i=0;i<4;i++){np[i][0]=-tpiece[i][1];np[i][1]=tpiece[i][0];}int f[8];for(int i=0;i<4;i++){f[i*2]=np[i][0];f[i*2+1]=np[i][1];}if(!tetris_hit(tx,ty,f))for(int i=0;i<4;i++){tpiece[i][0]=np[i][0];tpiece[i][1]=np[i][1];}tetris_draw(0);}
+                else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);print("Tetris: ",YELLOW);char b[5];int sc=tscore,i=4;b[4]=0;while(sc||i==4){b[--i]='0'+sc%10;sc/=10;}println(b+i,WHITE);break;}
+                if(app_mode==8){print_at(30,12,"GAME OVER!",RED);print_at(28,13,"Press Q to quit",WHITE);app_mode=4;}
                 for(volatile int d=0;d<80000;d++);
-            }else if(app_mode==5){ /* Pong playing */
-                if(c=='w'||c=='W'){if(p1y>4)p1y--;}
-                else if(c=='s'||c=='S'){if(p1y<17)p1y++;}
-                else if(c=='o'||c=='O'){if(p2y>4)p2y--;}
-                else if(c=='l'||c=='L'){if(p2y<17)p2y++;}
-                else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);println("Pong Final: P1=",LRED);char b1[3];int s1=p1score;if(s1==0)putc('0');else if(s1>=10){b1[0]='0'+s1/10;b1[1]='0'+s1%10;b1[2]=0;print(b1,WHITE);}else{putc('0'+s1);};print(" P2=",LBLUE);int s2=p2score;if(s2==0)putc('0');else if(s2>=10){b1[0]='0'+s2/10;b1[1]='0'+s2%10;b1[2]=0;print(b1,WHITE);}else{putc('0'+s2);}println("",0);break;}
+            }else if(app_mode==5){
+                if(c=='w'||c=='W'){if(p1y>4)p1y--;}else if(c=='s'||c=='S'){if(p1y<17)p1y++;}
+                else if(c=='o'||c=='O'){if(p2y>4)p2y--;}else if(c=='l'||c=='L'){if(p2y<17)p2y++;}
+                else if(c=='q'||c=='Q'){app_mode=0;clear_screen();print("TFD~(",GREEN);print(username,WHITE);print("/",LGRAY);print(pcname,WHITE);println("/home):$",GREEN);print("P1:",LRED);char b[3];int s1=p1score;if(s1>=10){b[0]='0'+s1/10;b[1]='0'+s1%10;b[2]=0;print(b,WHITE);}else putc('0'+s1);print(" P2:",LBLUE);int s2=p2score;if(s2>=10){b[0]='0'+s2/10;b[1]='0'+s2%10;b[2]=0;print(b,WHITE);}else putc('0'+s2);println("",0);break;}
                 pong_update();
                 for(volatile int d=0;d<50000;d++);
             }
         }
-        
-        if(app_mode==0){
-            hide_cursor();
-            cmd[cmd_len]=0;
-            process_command(cmd);
-        }
+        if(app_mode==0){hide_cursor();cmd[cmd_len]=0;process_command(cmd);}
     }
 }
